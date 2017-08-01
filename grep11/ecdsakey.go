@@ -25,8 +25,9 @@ import (
 )
 
 type ecdsaPrivateKey struct {
-	ski []byte
-	pub ecdsaPublicKey
+	ski     []byte
+	keyBlob []byte
+	pub     ecdsaPublicKey
 }
 
 // Bytes converts this key to its byte representation,
@@ -59,8 +60,9 @@ func (k *ecdsaPrivateKey) PublicKey() (bccsp.Key, error) {
 }
 
 type ecdsaPublicKey struct {
-	ski []byte
-	pub *ecdsa.PublicKey
+	ski     []byte
+	keyBlob []byte
+	pub     *ecdsa.PublicKey
 }
 
 // Bytes converts this key to its byte representation,

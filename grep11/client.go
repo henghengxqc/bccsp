@@ -121,7 +121,7 @@ type PubKeyASN struct {
 	Point asn1.BitString
 }
 
-func (csp *impl) generateECKey(curve asn1.ObjectIdentifier, ephemeral bool) ([]byte, *ecdsa.PublicKey, error) {
+func (csp *impl) generateECKey(curve asn1.ObjectIdentifier, ephemeral bool) ([]byte, ecdsaPrivateKey, error) {
 	marshaledOID, err := asn1.Marshal(curve)
 	if err != nil {
 		return nil, nil, fmt.Errorf("Could not marshal OID [%s]", err.Error())
@@ -146,13 +146,18 @@ func (csp *impl) generateECKey(curve asn1.ObjectIdentifier, ephemeral bool) ([]b
 		return nil, nil, fmt.Errorf("Failed Unmarshaling Public Key [%s]", err)
 	}
 
+	hash := sha256.Sum256(ecpt)
+	ski := hash[:]
+
 	x, y := elliptic.Unmarshal(nistCurve, decode.Point.Bytes)
 	if x == nil {
 		return nil, nil, fmt.Errorf("Failed Unmarshaling Public Key..\n%s", hex.Dump(decode.Point.Bytes))
 	}
 
 	pubGoKey := &ecdsa.PublicKey{Curve: nistCurve, X: x, Y: y}
-	return k.PrivKey, pubGoKey, nil
+
+	key = &ecdsaPrivateKey{ski, k.PrivKey, ecdsaPublicKey{ski, k.PubKey, pubGoKey}}
+	return ski, key, nil
 }
 
 func (csp *impl) signP11ECDSA(ski []byte, msg []byte) (R, S *big.Int, err error) {

@@ -18,8 +18,6 @@ package grep11
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/rsa"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -41,37 +39,9 @@ var (
 	sessionCacheSize = 10
 )
 
-func genPin() ([]byte, error) {
-	const pinLen = 8
-	pinLetters := []byte("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-
-	pin := make([]byte, pinLen)
-	_, err := rand.Read(pin)
-	if err != nil {
-		return nil, fmt.Errorf("Failed on rand.Read() in genPin [%s]", err)
-	}
-
-	for i := 0; i < pinLen; i++ {
-		index := int(pin[i])
-		size := len(pinLetters)
-		pin[i] = pinLetters[index%size]
-	}
-	return pin, nil
-}
-
-func getNonce() ([]byte, error) {
-	const nonceLen = 1024
-	nonce := make([]byte, nonceLen)
-	_, err := rand.Read(nonce)
-	if err != nil {
-		return nil, fmt.Errorf("Failed on rand.Read() in getNonce [%s]", err)
-	}
-	return nonce, nil
-}
-
 // New returns a new instance of the software-based BCCSP
 // set at the passed security level, hash family and KeyStore.
-func New(opts GREP11Opts, keyStore bccsp.KeyStore) (bccsp.BCCSP, error) {
+func New(opts GREP11Opts, fallbackKS bccsp.KeyStore) (bccsp.BCCSP, error) {
 	// Init config
 	conf := &config{}
 	err := conf.setSecurityLevel(opts.SecLevel, opts.HashFamily)
@@ -79,7 +49,7 @@ func New(opts GREP11Opts, keyStore bccsp.KeyStore) (bccsp.BCCSP, error) {
 		return nil, fmt.Errorf("Failed initializing configuration [%s]", err)
 	}
 
-	swCSP, err := sw.New(opts.SecLevel, opts.HashFamily, keyStore)
+	swCSP, err := sw.New(opts.SecLevel, opts.HashFamily, fallbackKS)
 	if err != nil {
 		return nil, fmt.Errorf("Failed initializing fallback SW BCCSP [%s]", err)
 	}
@@ -96,13 +66,15 @@ func New(opts GREP11Opts, keyStore bccsp.KeyStore) (bccsp.BCCSP, error) {
 	defer conn.Close()
 	m := pb.NewGrep11ManagerClient(conn)
 
-	pin, err := genPin()
-	if err != nil {
-		return nil, fmt.Errorf("Could not generate pin %s", err)
+	if opts.FileKeystore == nil {
+		return nil, fmt.Errorf("FileKeystore is required to use GREP11 CSP")
 	}
-	nonce, err := getNonce()
+
+	keyStore := NewHsmBasedKeyStore(opts.FileKeystore.KeyStorePath, fallbackKS)
+
+	pin, nonce, err := keyStore.Init()
 	if err != nil {
-		return nil, fmt.Errorf("Could not generate nonce %s", err)
+		return nil, fmt.Errorf("Failed initializing HSMBasedKeyStore [%s]", err)
 	}
 
 	r, err := m.Load(context.Background(), &pb.LoadInfo{pin, nonce})
@@ -145,30 +117,32 @@ func (csp *impl) KeyGen(opts bccsp.KeyGenOpts) (k bccsp.Key, err error) {
 	// Parse algorithm
 	switch opts.(type) {
 	case *bccsp.ECDSAKeyGenOpts:
-		ski, pub, err := csp.generateECKey(csp.conf.ellipticCurve, opts.Ephemeral())
+		ski, k, err := csp.generateECKey(csp.conf.ellipticCurve, opts.Ephemeral())
 		if err != nil {
 			return nil, fmt.Errorf("Failed generating ECDSA key [%s]", err)
 		}
-		k = &ecdsaPrivateKey{ski, ecdsaPublicKey{ski, pub}}
 
 	case *bccsp.ECDSAP256KeyGenOpts:
-		ski, pub, err := csp.generateECKey(oidNamedCurveP256, opts.Ephemeral())
+		ski, k, err := csp.generateECKey(oidNamedCurveP256, opts.Ephemeral())
 		if err != nil {
 			return nil, fmt.Errorf("Failed generating ECDSA P256 key [%s]", err)
 		}
 
-		k = &ecdsaPrivateKey{ski, ecdsaPublicKey{ski, pub}}
-
 	case *bccsp.ECDSAP384KeyGenOpts:
-		ski, pub, err := csp.generateECKey(oidNamedCurveP384, opts.Ephemeral())
+		ski, k, err := csp.generateECKey(oidNamedCurveP384, opts.Ephemeral())
 		if err != nil {
 			return nil, fmt.Errorf("Failed generating ECDSA P384 key [%s]", err)
 		}
 
-		k = &ecdsaPrivateKey{ski, ecdsaPublicKey{ski, pub}}
-
 	default:
 		return csp.BCCSP.KeyGen(opts)
+	}
+
+	if !opts.Ephemeral() {
+		err := csp.ks.StoreKey(k)
+		if err != nil {
+			return nil, fmt.Errorf("Failed storing key [%s]", err)
+		}
 	}
 
 	return k, nil
