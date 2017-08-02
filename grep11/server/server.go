@@ -212,17 +212,6 @@ func (s *grep11Server) ImportECKey(c context.Context, verifyInfo *pb.ImportInfo)
 }
 
 func CreateTestServer(address, port, store string) {
-	cleanKnownSessions(store)
-	m := &grep11Manager{address, port, store}
-	lis, err := net.Listen("tcp", m.address+":"+m.port)
-	if err != nil {
-		logger.Warningf("Failed to listen, continuing in hope that server is already running: %v", err)
-		return
-	}
-	logger.Infof("Manager listening on %s", lis.Addr().String())
-	grepManager := grpc.NewServer()
-	pb.RegisterGrep11ManagerServer(grepManager, m)
-	go grepManager.Serve(lis)
-
+	go Start(address, port, store)
 	time.Sleep(1000 * time.Microsecond)
 }

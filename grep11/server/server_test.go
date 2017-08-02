@@ -28,6 +28,7 @@ import (
 	"google.golang.org/grpc"
 
 	pb "github.com/vpaprots/bccsp/grep11/protos"
+	"github.com/stretchr/testify/assert"
 )
 
 var (
@@ -105,7 +106,7 @@ func TestManagerLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("could not greet: %v", err)
 	}
-	t.Logf("Greeting from %s", r.Address)
+	t.Logf("Greetings from %s", r.Address)
 }
 
 func TestServerConnect(t *testing.T) {
@@ -134,7 +135,7 @@ func TestServerConnect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("did not connect: %v", err)
 	}
-	t.Logf("Coonected to %s", r.Address)
+	t.Logf("Connected to %s", r.Address)
 	defer conn.Close()
 }
 
@@ -165,7 +166,7 @@ func TestServerSignVerify(t *testing.T) {
 		t.Fatalf("did not connect: %v", err)
 	}
 	defer conn.Close()
-	t.Logf("Coonected to %s", r.Address)
+	t.Logf("Connected to %s", r.Address)
 
 	s := pb.NewGrep11Client(conn)
 
@@ -209,31 +210,38 @@ func TestServerSignVerify(t *testing.T) {
 
 }
 
-func TestSessions(t *testing.T) {
-	for repeat := 0; repeat < 5; repeat++ {
-		for i := 0; i < 1000; i++ {
-			conn, err := grpc.Dial(Address+":"+Port, grpc.WithInsecure())
-			if err != nil {
-				t.Fatalf("did not connect: %v", err)
-			}
-			defer conn.Close()
-			c := pb.NewGrep11ManagerClient(conn)
-
-			pin, err := genPin()
-			if err != nil {
-				t.Fatalf("Could not generate pin %s", err)
-			}
-			nonce, err := getNonce()
-			if err != nil {
-				t.Fatalf("Could not generate nonce %s", err)
-			}
-
-			r, err := c.Load(context.Background(), &pb.LoadInfo{pin, nonce})
-			if err != nil {
-				t.Fatalf("could not greet: %v", err)
-			}
-			t.Logf("Greeting from %s", r.Address)
+func TestSessionsWithCleanup(t *testing.T) {
+	for i := 0; i < 5; i++ {
+		conn, err := grpc.Dial(Address+":"+Port, grpc.WithInsecure())
+		if err != nil {
+			t.Fatalf("did not connect: %v", err)
 		}
-		cleanKnownSessions(Store)
+		defer conn.Close()
+		c := pb.NewGrep11ManagerClient(conn)
+
+		pin, err := genPin()
+		if err != nil {
+			t.Fatalf("Could not generate pin %s", err)
+		}
+		nonce, err := getNonce()
+		if err != nil {
+			t.Fatalf("Could not generate nonce %s", err)
+		}
+
+		r, err := c.Load(context.Background(), &pb.LoadInfo{pin, nonce})
+		if err != nil {
+			t.Fatalf("could not greet: %v", err)
+		}
+		t.Logf("Greetings from %s", r.Address)
 	}
+	err := cleanKnownSessions(Store)
+	if err != nil {
+		t.Fatalf("Could not logout sessions: %v", err)
+	}
+}
+
+func TestNonExistentStore(t *testing.T) {
+	err := cleanKnownSessions("badfile")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no such file or directory")
 }

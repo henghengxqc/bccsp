@@ -46,54 +46,46 @@ import "C"
 import (
 	"bufio"
 	"encoding/base64"
+	"io"
 	"os"
 	"sync"
 	"unsafe"
 )
 
-func cleanKnownSessions(store string) {
+func cleanKnownSessions(store string) error {
 	logger.Infof("Looking for existing sessions in %s", store)
 	var _, err = os.Stat(store)
 	if os.IsNotExist(err) {
 		logger.Infof("No list of existing sessions found in %s", store)
-		return
+		return err
 	}
 
 	f, err := os.Open(store)
 	if err != nil {
 		logger.Infof("Error opening list of known sessions: %v\n", err)
-		return
+		return err
 	}
 
 	defer f.Close()
 	defer os.Remove(store)
 
 	r := bufio.NewReader(f)
+
+	var line string
 	counter := 0
+
 	for {
-		var line []byte
-		var incomplete bool
-		line, incomplete, err = r.ReadLine()
-		if incomplete {
-			for incomplete || err != nil {
-				var ln []byte
-				ln, incomplete, err = r.ReadLine()
-				line = append(line, ln...)
-			}
-		}
-
-		if err != nil {
+		line, err = r.ReadString('\n')
+		if err == io.EOF {
 			break
+		} else if err != nil {
+			return err
 		}
 
-		if len(line) == 0 {
-			continue
-		}
-
-		pinblob, err := base64.StdEncoding.DecodeString(string(line))
+		pinblob, err := base64.StdEncoding.DecodeString(line)
 		if err != nil {
 			logger.Warningf("Decode error: %s", err)
-			return
+			return err
 		}
 
 		logger.Infof("Logging out EP11 session %s...>> ", line[:16])
@@ -106,6 +98,7 @@ func cleanKnownSessions(store string) {
 	}
 
 	logger.Infof("Successfully logged out %d session(s)", counter)
+	return nil
 }
 
 var lock sync.Mutex
@@ -119,12 +112,12 @@ func logSession(store string, pin []byte) error {
 	if os.IsNotExist(err) {
 		file, err = os.OpenFile(store, os.O_CREATE|os.O_WRONLY, 0600)
 		if err != nil {
-			logger.Fatalf("Could not create file %s to record pin [%s]", store, err)
+			logger.Fatalf("Could not create file %s to record PIN [%s]", store, err)
 		}
 	} else {
 		file, err = os.OpenFile(store, os.O_APPEND|os.O_WRONLY, 0600)
 		if err != nil {
-			logger.Fatalf("Could not open file %s to record pin [%s]", store, err)
+			logger.Fatalf("Could not open file %s to record PIN [%s]", store, err)
 		}
 	}
 

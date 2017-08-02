@@ -16,8 +16,16 @@ limitations under the License.
 package main
 
 import (
+	"strings"
+
+	"github.com/hyperledger/fabric/common/flogging"
+	logging "github.com/op/go-logging"
 	"github.com/spf13/viper"
 	"github.com/vpaprots/bccsp/grep11/server"
+)
+
+var (
+	logger = flogging.MustGetLogger("grep11server")
 )
 
 func main() {
@@ -40,7 +48,8 @@ func main() {
 
 	address := viper.GetString("grep11.address")
 	port := viper.GetString("grep11.port")
+	store := viper.GetString("grep11.store")
 
-	server.Start(address, port)
+	server.Start(address, port, store)
 
 }
