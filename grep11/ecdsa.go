@@ -74,7 +74,7 @@ func unmarshalECDSASignature(raw []byte) (*big.Int, *big.Int, error) {
 }
 
 func (csp *impl) signECDSA(k ecdsaPrivateKey, digest []byte, opts bccsp.SignerOpts) (signature []byte, err error) {
-	r, s, err := csp.signP11ECDSA(k.ski, digest)
+	r, s, err := csp.signP11ECDSA(k.keyBlob, digest)
 	if err != nil {
 		return nil, err
 	}
@@ -115,6 +115,6 @@ func (csp *impl) verifyECDSA(k ecdsaPublicKey, signature, digest []byte, opts bc
 	if csp.softVerify {
 		return ecdsa.Verify(k.pub, digest, r, s), nil
 	} else {
-		return csp.verifyP11ECDSA(k.ski, digest, r, s, k.pub.Curve.Params().BitSize/8)
+		return csp.verifyP11ECDSA(k.keyBlob, digest, r, s, k.pub.Curve.Params().BitSize/8)
 	}
 }

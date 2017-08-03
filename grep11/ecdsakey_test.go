@@ -32,7 +32,7 @@ func TestECDSAPKIXPublicKeyImportOptsKeyImporter(t *testing.T) {
 
 	_, err := ki.KeyImport("Hello World", &bccsp.ECDSAPKIXPublicKeyImportOpts{})
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "[ECDSAPKIXPublicKeyImportOpts] Invalid raw material. Expected byte array.")
+	assert.Contains(t, err.Error(), "Invalid raw material. Expected byte array.")
 
 	_, err = ki.KeyImport("Hello World", nil)
 	assert.Error(t, err)
@@ -44,7 +44,7 @@ func TestECDSAPKIXPublicKeyImportOptsKeyImporter(t *testing.T) {
 
 	_, err = ki.KeyImport([]byte(nil), &bccsp.ECDSAPKIXPublicKeyImportOpts{})
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "[ECDSAPKIXPublicKeyImportOpts] Invalid raw. It must not be nil.")
+	assert.Contains(t, err.Error(), "Invalid raw. It must not be nil.")
 
 	_, err = ki.KeyImport([]byte{0}, &bccsp.ECDSAPKIXPublicKeyImportOpts{})
 	assert.Error(t, err)
@@ -59,43 +59,12 @@ func TestECDSAPKIXPublicKeyImportOptsKeyImporter(t *testing.T) {
 	assert.Contains(t, err.Error(), "Failed casting to ECDSA public key. Invalid raw material.")
 }
 
-func TestECDSAPrivateKeyImportOptsKeyImporter(t *testing.T) {
-	//if currentBCCSP.(*impl).noPrivImport {
-	t.Skip("Key import turned off. Skipping Private Key Importer tests as they currently require Key Import.")
-	//}
-
-	ki := currentBCCSP
-
-	_, err := ki.KeyImport("Hello World", &bccsp.ECDSAPrivateKeyImportOpts{})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "[ECDSADERPrivateKeyImportOpts] Invalid raw material. Expected byte array.")
-
-	_, err = ki.KeyImport(nil, &bccsp.ECDSAPrivateKeyImportOpts{})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "Invalid raw. Cannot be nil.")
-
-	_, err = ki.KeyImport([]byte(nil), &bccsp.ECDSAPrivateKeyImportOpts{})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "[ECDSADERPrivateKeyImportOpts] Invalid raw. It must not be nil.")
-
-	_, err = ki.KeyImport([]byte{0}, &bccsp.ECDSAPrivateKeyImportOpts{})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "Failed converting PKIX to ECDSA public key")
-
-	k, err := rsa.GenerateKey(rand.Reader, 512)
-	assert.NoError(t, err)
-	raw := x509.MarshalPKCS1PrivateKey(k)
-	_, err = ki.KeyImport(raw, &bccsp.ECDSAPrivateKeyImportOpts{})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "Failed casting to ECDSA public key. Invalid raw material.")
-}
-
 func TestECDSAGoPublicKeyImportOptsKeyImporter(t *testing.T) {
 	ki := currentBCCSP
 
 	_, err := ki.KeyImport("Hello World", &bccsp.ECDSAGoPublicKeyImportOpts{})
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "[ECDSAGoPublicKeyImportOpts] Invalid raw material. Expected *ecdsa.PublicKey.")
+	assert.Contains(t, err.Error(), "Invalid raw material. Expected *ecdsa.PublicKey.")
 
 	_, err = ki.KeyImport(nil, &bccsp.ECDSAGoPublicKeyImportOpts{})
 	assert.Error(t, err)
@@ -107,7 +76,7 @@ func TestX509PublicKeyImportOptsKeyImporter(t *testing.T) {
 
 	_, err := ki.KeyImport("Hello World", &bccsp.X509PublicKeyImportOpts{})
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "[X509PublicKeyImportOpts] Invalid raw material. Expected *x509.Certificate.")
+	assert.Contains(t, err.Error(), "Invalid raw material. Expected *x509.Certificate.")
 
 	_, err = ki.KeyImport(nil, &bccsp.X509PublicKeyImportOpts{})
 	assert.Error(t, err)

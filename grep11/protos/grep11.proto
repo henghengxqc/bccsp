@@ -25,7 +25,6 @@ service Grep11 {
 	rpc GenerateECKey(GenerateInfo) returns (GenerateStatus) {}
 	rpc SignP11ECDSA(SignInfo) returns (SignStatus) {}
 	rpc VerifyP11ECDSA(VerifyInfo) returns (VerifyStatus) {}
-	rpc ImportECKey(ImportInfo) returns (ImportStatus) {}
 }
 
 message LoadInfo {
@@ -35,7 +34,7 @@ message LoadInfo {
 
 message LoadStatus {
 	string address = 1;
-	bytes  pinblob = 2;
+	bool session = 2;
 	string error = 3;
 }
 
@@ -67,18 +66,5 @@ message VerifyInfo {
 
 message VerifyStatus {
 	bool valid = 1;
-	string error = 2;
-}
-
-message ImportInfo {
-	bytes oid = 1;
-	bytes privKey = 2;
-	bytes ecPt = 3;
-	bool ephemeral = 4;
-	bool keyType = 5;
-}
-
-message ImportStatus {
-	bytes ski = 1;
 	string error = 2;
 }

@@ -16,10 +16,8 @@ limitations under the License.
 package grep11
 
 import (
-	"crypto/ecdsa"
 	"crypto/elliptic"
 	"encoding/asn1"
-	"encoding/hex"
 	"fmt"
 	"math/big"
 
@@ -27,38 +25,6 @@ import (
 
 	pb "github.com/vpaprots/bccsp/grep11/protos"
 )
-
-// Look for an EC key by SKI, stored in CKA_ID
-// This function can probably be addapted for both EC and RSA keys.
-func (csp *impl) getECKey(ski []byte) (pubKey *ecdsa.PublicKey, isPriv bool, err error) {
-	return nil, false, fmt.Errorf("IMPLEMENTME")
-	/*
-		k, err := csp.grpc.GetECKey(context.Background(), &pb.GetKeyInfo{ski})
-		if err != nil {
-			return nil, false, fmt.Errorf("Could not remote-load PKCS11 library [%s]\n Remote Response: <%+v>", err, k)
-		}
-		if k.Error != "" {
-			return nil, false, fmt.Errorf("Remote Load call reports error: %s", k.Error)
-		}
-
-		curveOid := new(asn1.ObjectIdentifier)
-		_, err = asn1.Unmarshal(k.Oid, curveOid)
-		if err != nil {
-			return nil, false, fmt.Errorf("Failed Unmarshaling Curve OID [%s]\n%s", err.Error(), hex.EncodeToString(k.Oid))
-		}
-
-		curve := namedCurveFromOID(*curveOid)
-		if curve == nil {
-			return nil, false, fmt.Errorf("Cound not recognize Curve from OID")
-		}
-		x, y := elliptic.Unmarshal(curve, k.PubKey)
-		if x == nil {
-			return nil, false, fmt.Errorf("Failed Unmarshaling Public Key")
-		}
-
-		pubKey = &ecdsa.PublicKey{Curve: curve, X: x, Y: y}
-		return pubKey, k.IsPriv, nil*/
-}
 
 // RFC 5480, 2.1.1.1. Named Curve
 //
@@ -111,57 +77,31 @@ func oidFromNamedCurve(curve elliptic.Curve) (asn1.ObjectIdentifier, bool) {
 	return nil, false
 }
 
-type EckeyIdentASN struct {
-	KeyType asn1.ObjectIdentifier
-	Curve   asn1.ObjectIdentifier
-}
-
-type PubKeyASN struct {
-	Ident EckeyIdentASN
-	Point asn1.BitString
-}
-
-func (csp *impl) generateECKey(curve asn1.ObjectIdentifier, ephemeral bool) ([]byte, ecdsaPrivateKey, error) {
+func (csp *impl) generateECKey(curve asn1.ObjectIdentifier, ephemeral bool) (*ecdsaPrivateKey, error) {
 	marshaledOID, err := asn1.Marshal(curve)
 	if err != nil {
-		return nil, nil, fmt.Errorf("Could not marshal OID [%s]", err.Error())
+		return nil, fmt.Errorf("Could not marshal OID [%s]", err.Error())
 	}
 
 	k, err := csp.grpc.GenerateECKey(context.Background(), &pb.GenerateInfo{marshaledOID})
 	if err != nil {
-		return nil, nil, fmt.Errorf("Could not remote-generate PKCS11 library [%s]\n Remote Response: <%+v>", err, k)
+		return nil, fmt.Errorf("Could not remote-generate PKCS11 library [%s]\n Remote Response: <%+v>", err, k)
 	}
 	if k.Error != "" {
-		return nil, nil, fmt.Errorf("Remote Generate call reports error: %s", k.Error)
+		return nil, fmt.Errorf("Remote Generate call reports error: %s", k.Error)
 	}
 
-	nistCurve := namedCurveFromOID(curve)
-	if curve == nil {
-		return nil, nil, fmt.Errorf("Cound not recognize Curve from OID")
-	}
-
-	decode := &PubKeyASN{}
-	_, err = asn1.Unmarshal(k.PubKey, decode)
+	ski, pubGoKey, err := blobToPubKey(k.PubKey, curve)
 	if err != nil {
-		return nil, nil, fmt.Errorf("Failed Unmarshaling Public Key [%s]", err)
+		return nil, fmt.Errorf("Failed Unmarshaling Public Key [%s]", err)
 	}
 
-	hash := sha256.Sum256(ecpt)
-	ski := hash[:]
-
-	x, y := elliptic.Unmarshal(nistCurve, decode.Point.Bytes)
-	if x == nil {
-		return nil, nil, fmt.Errorf("Failed Unmarshaling Public Key..\n%s", hex.Dump(decode.Point.Bytes))
-	}
-
-	pubGoKey := &ecdsa.PublicKey{Curve: nistCurve, X: x, Y: y}
-
-	key = &ecdsaPrivateKey{ski, k.PrivKey, ecdsaPublicKey{ski, k.PubKey, pubGoKey}}
-	return ski, key, nil
+	key := &ecdsaPrivateKey{ski, k.PrivKey, &ecdsaPublicKey{ski, k.PubKey, pubGoKey}}
+	return key, nil
 }
 
-func (csp *impl) signP11ECDSA(ski []byte, msg []byte) (R, S *big.Int, err error) {
-	sig, err := csp.grpc.SignP11ECDSA(context.Background(), &pb.SignInfo{ski, msg})
+func (csp *impl) signP11ECDSA(keyBlob []byte, msg []byte) (R, S *big.Int, err error) {
+	sig, err := csp.grpc.SignP11ECDSA(context.Background(), &pb.SignInfo{keyBlob, msg})
 	if err != nil {
 		return nil, nil, fmt.Errorf("Could not remote-sign PKCS11 library [%s]\n Remote Response: <%s>", err, sig)
 	}
@@ -177,7 +117,7 @@ func (csp *impl) signP11ECDSA(ski []byte, msg []byte) (R, S *big.Int, err error)
 	return R, S, nil
 }
 
-func (csp *impl) verifyP11ECDSA(ski []byte, msg []byte, R, S *big.Int, byteSize int) (valid bool, err error) {
+func (csp *impl) verifyP11ECDSA(keyBlob []byte, msg []byte, R, S *big.Int, byteSize int) (valid bool, err error) {
 	r := R.Bytes()
 	s := S.Bytes()
 
@@ -186,7 +126,7 @@ func (csp *impl) verifyP11ECDSA(ski []byte, msg []byte, R, S *big.Int, byteSize 
 	copy(sig[byteSize-len(r):byteSize], r)
 	copy(sig[2*byteSize-len(s):], s)
 
-	val, err := csp.grpc.VerifyP11ECDSA(context.Background(), &pb.VerifyInfo{ski, msg, sig})
+	val, err := csp.grpc.VerifyP11ECDSA(context.Background(), &pb.VerifyInfo{keyBlob, msg, sig})
 	if err != nil {
 		return false, fmt.Errorf("Could not remote-verify PKCS11 library [%s]\n Remote Response: <%+v>", err, val)
 	}
@@ -195,30 +135,4 @@ func (csp *impl) verifyP11ECDSA(ski []byte, msg []byte, R, S *big.Int, byteSize 
 	}
 
 	return val.Valid, nil
-}
-
-const (
-	privateKeyFlag = true
-	publicKeyFlag  = false
-)
-
-func (csp *impl) importECKey(curve asn1.ObjectIdentifier, privKey, ecPt []byte, ephemeral bool, keyType bool) (ski []byte, err error) {
-	return nil, fmt.Errorf("IMPLEMENTME")
-	/*marshaledOID, err := asn1.Marshal(curve)
-	if err != nil {
-		return nil, fmt.Errorf("Could not marshal OID [%s]", err.Error())
-	}
-
-	k, err := csp.grpc.ImportECKey(context.Background(), &pb.ImportInfo{marshaledOID, privKey, ecPt, ephemeral, keyType})
-	if err != nil {
-		return nil, fmt.Errorf("Could not remote-import PKCS11 library [%s]\n Remote Response: <%s>", err, k)
-	}
-	if k.Error != "" {
-		return nil, fmt.Errorf("Remote ImportKey call reports error: %s", k.Error)
-	}
-	return k.Ski, nil*/
-}
-
-func (csp *impl) getSecretValue(ski []byte) []byte {
-	return nil
 }

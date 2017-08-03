@@ -28,10 +28,10 @@ import (
 	"encoding/asn1"
 	"fmt"
 	"hash"
+	"io/ioutil"
 	"math/big"
 	"net"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -60,18 +60,24 @@ type testConfig struct {
 
 func TestMain(m *testing.M) {
 	// Activate DEBUG level to cover listAttrs function
-	logging.SetLevel(logging.DEBUG, "bccsp_p11")
+	logging.SetLevel(logging.DEBUG, "bccsp_ep11")
 
 	//server.CreateTestServer()
 
-	ks, err := sw.NewFileBasedKeyStore(nil, os.TempDir(), false)
+	storePath, err := ioutil.TempDir("", "hsmKeystore")
 	if err != nil {
-		fmt.Printf("Failed initiliazing KeyStore [%s]", err)
+		fmt.Printf("Failed gettin a temporary key store path [%s]", err)
+		os.Exit(-1)
+	}
+	fmt.Printf("Creating a keystore in %s\n", storePath)
+
+	ks, err := sw.NewFileBasedKeyStore(nil, storePath, false)
+	if err != nil {
+		fmt.Printf("Failed initiliazing KeyStore [%s]\n", err)
 		os.Exit(-1)
 	}
 	currentKS = ks
 
-	lib, _, _ := FindPKCS11Lib()
 	tests := []testConfig{
 		{256, "SHA2", true, true},
 		{256, "SHA3", false, true},
@@ -80,15 +86,9 @@ func TestMain(m *testing.M) {
 		{384, "SHA3", true, true},
 	}
 
-	if strings.Contains(lib, "softhsm") {
-		tests = append(tests, []testConfig{
-			{256, "SHA2", true, false},
-		}...)
-	}
-
 	opts := GREP11Opts{
-		Address: "localhost",
-		Port:    "9886",
+		Address: "9.47.152.121",
+		Port:    "9876",
 	}
 	for _, config := range tests {
 		var err error
@@ -97,9 +97,10 @@ func TestMain(m *testing.M) {
 		opts.HashFamily = config.hashFamily
 		opts.SecLevel = config.securityLevel
 		opts.SoftVerify = config.softVerify
+		opts.FileKeystore = &FileKeystoreOpts{storePath}
 		currentBCCSP, err = New(opts, currentKS)
 		if err != nil {
-			fmt.Printf("Failed initiliazing BCCSP at [%+v]: [%s]", opts, err)
+			fmt.Printf("Failed initiliazing BCCSP at [%+v]: [%s]\n", opts, err)
 			os.Exit(-1)
 		}
 
@@ -109,6 +110,7 @@ func TestMain(m *testing.M) {
 			os.Exit(-1)
 		}
 	}
+	os.RemoveAll(storePath)
 	os.Exit(0)
 }
 

@@ -27,7 +27,7 @@ import (
 type ecdsaPrivateKey struct {
 	ski     []byte
 	keyBlob []byte
-	pub     ecdsaPublicKey
+	pub     *ecdsaPublicKey
 }
 
 // Bytes converts this key to its byte representation,
@@ -56,7 +56,7 @@ func (k *ecdsaPrivateKey) Private() bool {
 // PublicKey returns the corresponding public key part of an asymmetric public/private key pair.
 // This method returns an error in symmetric key schemes.
 func (k *ecdsaPrivateKey) PublicKey() (bccsp.Key, error) {
-	return &k.pub, nil
+	return k.pub, nil
 }
 
 type ecdsaPublicKey struct {

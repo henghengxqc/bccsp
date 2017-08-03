@@ -17,7 +17,10 @@ package grep11
 
 import (
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/asn1"
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
@@ -32,15 +35,16 @@ import (
 	"github.com/hyperledger/fabric/bccsp/utils"
 )
 
-// NewhsmBasedKeyStore instantiated a file-based key store at a given position.
-// The key store can be encrypted if a non-empty password is specifiec.
-// It can be also be set as read only. In this case, any store operation
-// will be forbidden
-func NewHsmBasedKeyStore(path string, fallbackKS bccsp.KeyStore) bccsp.KeyStore {
+func NewHsmBasedKeyStore(path string, fallbackKS bccsp.KeyStore) (*hsmBasedKeyStore, error) {
+	_, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return nil, fmt.Errorf("Cannot find keystore directory %s", path)
+	}
+
 	ks := &hsmBasedKeyStore{}
 	ks.path = path
 	ks.KeyStore = fallbackKS
-	return ks
+	return ks, nil
 }
 
 func newPin() ([]byte, error) {
@@ -71,13 +75,6 @@ func newNonce() ([]byte, error) {
 	return nonce, nil
 }
 
-// hsmBasedKeyStore is a folder-based KeyStore.
-// Each key is stored in a separated file whose name contains the key's SKI
-// and flags to identity the key's type. All the keys are stored in
-// a folder whose path is provided at initialization time.
-// The KeyStore can be initialized with a password, this password
-// is used to encrypt and decrypt the files storing the keys.
-// A KeyStore can be read only to avoid the overwriting of keys.
 type hsmBasedKeyStore struct {
 	bccsp.KeyStore
 	path string
@@ -86,52 +83,20 @@ type hsmBasedKeyStore struct {
 	m sync.Mutex
 }
 
-// Init initializes this KeyStore with a password, a path to a folder
-// where the keys are stored and a read only flag.
-// Each key is stored in a separated file whose name contains the key's SKI
-// and flags to identity the key's type.
-// If the KeyStore is initialized with a password, this password
-// is used to encrypt and decrypt the files storing the keys.
-// The pwd can be nil for non-encrypted KeyStores. If an encrypted
-// key-store is initialized without a password, then retrieving keys from the
-// KeyStore will fail.
-// A KeyStore can be read only to avoid the overwriting of keys.
-func (ks *hsmBasedKeyStore) Init() ([]byte, []byte, error) {
-	_, err := os.Stat(ks.path)
-	if os.IsNotExist(err) {
-		return nil, nil, fmt.Errorf("Cannot find keystore directory %s", ks.path)
-	}
-
-	var pin, nonce []byte
+func (ks *hsmBasedKeyStore) getPinAndNonce() (pin, nonce []byte, isNewPin bool, err error) {
 	pinPath := ks.getPathForAlias("pin", "nonce")
 	_, err = os.Stat(pinPath)
 	if os.IsNotExist(err) {
-		pin, err := newPin()
+		pin, err = newPin()
 		if err != nil {
-			return nil, nil, fmt.Errorf("Could not generate pin %s", err)
+			return nil, nil, true, fmt.Errorf("Could not generate pin %s", err)
 		}
-		nonce, err := newNonce()
+		nonce, err = newNonce()
 		if err != nil {
-			return nil, nil, fmt.Errorf("Could not generate nonce %s", err)
+			return nil, nil, true, fmt.Errorf("Could not generate nonce %s", err)
 		}
-
-		pinNnonce := pem.EncodeToMemory(
-			&pem.Block{
-				Type:  "PIN",
-				Bytes: pin,
-			})
-
-		pinNnonce = append(pinNnonce, pem.EncodeToMemory(
-			&pem.Block{
-				Type:  "NONCE",
-				Bytes: nonce,
-			})...)
-
-		err = ioutil.WriteFile(pinPath, pinNnonce, 0700)
-		if err != nil {
-			logger.Fatalf("Failed storing pin and nonce: [%s]", err)
-		}
-
+		logger.Debugf("Generated new pin %s and nonce", pin)
+		isNewPin = true
 	} else {
 		raw, err := ioutil.ReadFile(pinPath)
 		if err != nil {
@@ -139,17 +104,40 @@ func (ks *hsmBasedKeyStore) Init() ([]byte, []byte, error) {
 		}
 		block, rest := pem.Decode(raw)
 		if block == nil || block.Type != "PIN" {
-			logger.Fatalf("failed to decode PEM block containing pin")
+			return nil, nil, true, fmt.Errorf("Failed to decode PEM block containing pin")
 		}
 		pin = block.Bytes
 		block, _ = pem.Decode(rest)
 		if block == nil || block.Type != "NONCE" {
-			logger.Fatalf("failed to decode PEM block containing pin")
+			return nil, nil, true, fmt.Errorf("Failed to decode PEM block containing pin")
 		}
 		nonce = block.Bytes
+		isNewPin = false
+		logger.Debugf("Loaded existing pin %s and nonce", pin)
 	}
 
-	return pin, nonce, nil
+	return pin, nonce, isNewPin, nil
+}
+
+func (ks *hsmBasedKeyStore) storePinAndNonce(pin, nonce []byte) error {
+	pinPath := ks.getPathForAlias("pin", "nonce")
+	pinNnonce := pem.EncodeToMemory(
+		&pem.Block{
+			Type:  "PIN",
+			Bytes: pin,
+		})
+
+	pinNnonce = append(pinNnonce, pem.EncodeToMemory(
+		&pem.Block{
+			Type:  "NONCE",
+			Bytes: nonce,
+		})...)
+
+	err := ioutil.WriteFile(pinPath, pinNnonce, 0700)
+	if err != nil {
+		return fmt.Errorf("Failed storing pin and nonce: [%s]", err)
+	}
+	return nil
 }
 
 // ReadOnly returns true if this KeyStore is read only, false otherwise.
@@ -170,15 +158,29 @@ func (ks *hsmBasedKeyStore) GetKey(ski []byte) (k bccsp.Key, err error) {
 	switch suffix {
 	case "sk":
 		// Load the private key
-		key, err := ks.loadPrivateKey(hex.EncodeToString(ski))
+		keyBlob, err := ks.loadPrivateKey(hex.EncodeToString(ski))
 		if err != nil {
-			return nil, fmt.Errorf("Failed loading secret key [%x] [%s]", ski, err)
+			logger.Debugf("Failed loading secret key [%x] [%s]", ski, err)
+			break
 		}
 
-		switch key.(type) {
-		case *ecdsa.PrivateKey:
-			return &ecdsaPrivateKey{key.(*ecdsa.PrivateKey)}, nil
+		// Load the public key
+		key, err := ks.loadPublicKey(hex.EncodeToString(ski))
+		if err != nil {
+			return nil, fmt.Errorf("Failed loading public key [%x] [%s]", ski, err)
 		}
+
+		pubKey, ok := key.(*ecdsa.PublicKey)
+		if !ok {
+			return nil, fmt.Errorf("Failed loading public key, expected type *ecdsa.PublicKey [%s]", ski)
+		}
+
+		pubKeyBlob, err := pubKeyToBlob(pubKey)
+		if err != nil {
+			return nil, fmt.Errorf("Failed marshaling HSM pubKeyBlob [%s]", err)
+		}
+
+		return &ecdsaPrivateKey{ski, keyBlob, &ecdsaPublicKey{ski, pubKeyBlob, pubKey}}, nil
 	case "pk":
 		// Load the public key
 		key, err := ks.loadPublicKey(hex.EncodeToString(ski))
@@ -186,10 +188,17 @@ func (ks *hsmBasedKeyStore) GetKey(ski []byte) (k bccsp.Key, err error) {
 			return nil, fmt.Errorf("Failed loading public key [%x] [%s]", ski, err)
 		}
 
-		switch key.(type) {
-		case *ecdsa.PublicKey:
-			return &ecdsaPublicKey{key.(*ecdsa.PublicKey)}, nil
+		pubKey, ok := key.(*ecdsa.PublicKey)
+		if !ok {
+			return nil, fmt.Errorf("Failed loading public key, expected type *ecdsa.PublicKey [%s]", ski)
 		}
+
+		pubKeyBlob, err := pubKeyToBlob(pubKey)
+		if err != nil {
+			return nil, fmt.Errorf("Failed marshaling HSM pubKeyBlob [%s]", err)
+		}
+
+		return &ecdsaPublicKey{ski, pubKeyBlob, pubKey}, nil
 	}
 
 	return ks.KeyStore.GetKey(ski)
@@ -198,31 +207,28 @@ func (ks *hsmBasedKeyStore) GetKey(ski []byte) (k bccsp.Key, err error) {
 // StoreKey stores the key k in this KeyStore.
 // If this KeyStore is read only then the method will fail.
 func (ks *hsmBasedKeyStore) StoreKey(k bccsp.Key) (err error) {
-	if ks.readOnly {
-		return errors.New("Read only KeyStore.")
-	}
-
 	if k == nil {
 		return errors.New("Invalid key. It must be different from nil.")
 	}
+
 	switch k.(type) {
 	case *ecdsaPrivateKey:
 		kk := k.(*ecdsaPrivateKey)
 
-		err = ks.storePrivateKey(hex.EncodeToString(k.SKI()), kk.)
+		err = ks.storePrivateKey(hex.EncodeToString(k.SKI()), kk.keyBlob)
 		if err != nil {
 			return fmt.Errorf("Failed storing ECDSA private key [%s]", err)
 		}
-		
-		err = ks.storePrivateKey(hex.EncodeToString(k.SKI()), kk.privKey)
+
+		err = ks.storePublicKey(hex.EncodeToString(k.SKI()), kk.pub.pub)
 		if err != nil {
-			return fmt.Errorf("Failed storing ECDSA private key [%s]", err)
+			return fmt.Errorf("Failed storing ECDSA public key [%s]", err)
 		}
 
 	case *ecdsaPublicKey:
 		kk := k.(*ecdsaPublicKey)
 
-		err = ks.storePublicKey(hex.EncodeToString(k.SKI()), kk.pubKey)
+		err = ks.storePublicKey(hex.EncodeToString(k.SKI()), kk.pub)
 		if err != nil {
 			return fmt.Errorf("Failed storing ECDSA public key [%s]", err)
 		}
@@ -254,56 +260,53 @@ func (ks *hsmBasedKeyStore) getSuffix(alias string) string {
 }
 
 func (ks *hsmBasedKeyStore) storePrivateKey(alias string, raw []byte) error {
-	rawKey, err := utils.PrivateKeyToPEM(privateKey, ks.pwd)
-	if err != nil {
-		logger.Errorf("Failed converting private key to PEM [%s]: [%s]", alias, err)
-		return err
-	}
+	encodedKey := pem.EncodeToMemory(
+		&pem.Block{
+			Type:  "HSM ENCRYPTED PRIVATE KEY",
+			Bytes: raw,
+		})
 
-	err = ioutil.WriteFile(ks.getPathForAlias(alias, "sk"), rawKey, 0700)
+	err := ioutil.WriteFile(ks.getPathForAlias(alias, "sk"), encodedKey, 0700)
 	if err != nil {
-		logger.Errorf("Failed storing private key [%s]: [%s]", alias, err)
-		return err
+		return fmt.Errorf("Failed storing private key [%s]: [%s]", alias, err)
 	}
 
 	return nil
 }
 
 func (ks *hsmBasedKeyStore) storePublicKey(alias string, publicKey interface{}) error {
-	rawKey, err := utils.PublicKeyToPEM(publicKey, ks.pwd)
+	rawKey, err := utils.PublicKeyToPEM(publicKey, nil)
 	if err != nil {
-		logger.Errorf("Failed converting public key to PEM [%s]: [%s]", alias, err)
-		return err
+		return fmt.Errorf("Failed converting public key to PEM [%s]: [%s]", alias, err)
 	}
 
 	err = ioutil.WriteFile(ks.getPathForAlias(alias, "pk"), rawKey, 0700)
 	if err != nil {
-		logger.Errorf("Failed storing private key [%s]: [%s]", alias, err)
-		return err
+		return fmt.Errorf("Failed storing private key [%s]: [%s]", alias, err)
 	}
 
 	return nil
 }
 
-func (ks *hsmBasedKeyStore) loadPrivateKey(alias string) (interface{}, error) {
+func (ks *hsmBasedKeyStore) loadPrivateKey(alias string) ([]byte, error) {
 	path := ks.getPathForAlias(alias, "sk")
 	logger.Debugf("Loading private key [%s] at [%s]...", alias, path)
 
 	raw, err := ioutil.ReadFile(path)
 	if err != nil {
-		logger.Errorf("Failed loading private key [%s]: [%s].", alias, err.Error())
-
-		return nil, err
+		return nil, fmt.Errorf("Failed loading private key [%s]: [%s].", alias, err.Error())
 	}
 
-	privateKey, err := utils.PEMtoPrivateKey(raw, ks.pwd)
-	if err != nil {
-		logger.Errorf("Failed parsing private key [%s]: [%s].", alias, err.Error())
-
-		return nil, err
+	block, _ := pem.Decode(raw)
+	if block == nil || block.Type != "HSM ENCRYPTED PRIVATE KEY" {
+		return nil, fmt.Errorf("Failed to decode PEM block containing private key")
 	}
 
-	return privateKey, nil
+	if block.Bytes == nil {
+		return nil, fmt.Errorf("Found no private key blob in file")
+	}
+
+	return block.Bytes, nil
 }
 
 func (ks *hsmBasedKeyStore) loadPublicKey(alias string) (interface{}, error) {
@@ -312,21 +315,55 @@ func (ks *hsmBasedKeyStore) loadPublicKey(alias string) (interface{}, error) {
 
 	raw, err := ioutil.ReadFile(path)
 	if err != nil {
-		logger.Errorf("Failed loading public key [%s]: [%s].", alias, err.Error())
-
-		return nil, err
+		return nil, fmt.Errorf("Failed loading public key [%s]: [%s].", alias, err.Error())
 	}
 
-	privateKey, err := utils.PEMtoPublicKey(raw, ks.pwd)
+	publicKey, err := utils.PEMtoPublicKey(raw, nil)
 	if err != nil {
-		logger.Errorf("Failed parsing private key [%s]: [%s].", alias, err.Error())
-
-		return nil, err
+		return nil, fmt.Errorf("Failed parsing public key [%s]: [%s].", alias, err.Error())
 	}
 
-	return privateKey, nil
+	return publicKey, nil
 }
 
 func (ks *hsmBasedKeyStore) getPathForAlias(alias, suffix string) string {
 	return filepath.Join(ks.path, alias+"_"+suffix)
+}
+
+type EckeyIdentASN struct {
+	KeyType asn1.ObjectIdentifier
+	Curve   asn1.ObjectIdentifier
+}
+
+type PubKeyASN struct {
+	Ident EckeyIdentASN
+	Point asn1.BitString
+}
+
+func blobToPubKey(pubKey []byte, curve asn1.ObjectIdentifier) ([]byte, *ecdsa.PublicKey, error) {
+	nistCurve := namedCurveFromOID(curve)
+	if curve == nil {
+		return nil, nil, fmt.Errorf("Cound not recognize Curve from OID")
+	}
+
+	decode := &PubKeyASN{}
+	_, err := asn1.Unmarshal(pubKey, decode)
+	if err != nil {
+		return nil, nil, fmt.Errorf("Failed Unmarshaling Public Key [%s]", err)
+	}
+
+	hash := sha256.Sum256(decode.Point.Bytes)
+	ski := hash[:]
+
+	x, y := elliptic.Unmarshal(nistCurve, decode.Point.Bytes)
+	if x == nil {
+		return nil, nil, fmt.Errorf("Failed Unmarshaling Public Key..\n%s", hex.Dump(decode.Point.Bytes))
+	}
+
+	return ski, &ecdsa.PublicKey{Curve: nistCurve, X: x, Y: y}, nil
+}
+
+func pubKeyToBlob(pubKey *ecdsa.PublicKey) ([]byte, error) {
+	//elliptic.Marshal
+	return nil, nil
 }
