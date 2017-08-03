@@ -52,7 +52,7 @@ CK_RV logout ( CK_UTF8CHAR_PTR pin,      CK_ULONG pinlen) {
 			(uint64_t)(long)&ep11tok_target);
 }
 
-CK_RV generateKeyPair (
+CK_RV generateKeyPair (     unsigned char *oid,       size_t olen,
                       const unsigned char *pinblob,       size_t pinbloblen,
                             unsigned char *key,       size_t *klen,
                             unsigned char *pubkey,    size_t *pklen) {
@@ -62,7 +62,7 @@ CK_RV generateKeyPair (
 	    { CKA_SIGN,        &ltrue, sizeof(ltrue) },
 	} ;
 	CK_ATTRIBUTE puba[] = {                       // keep OID at index 0
-	    { CKA_EC_PARAMS,   XCP_EC_P256,  XCP_EC_P256_BYTES },
+	    { CKA_EC_PARAMS,   oid,    olen },
 	    { CKA_VERIFY,      &ltrue, sizeof(ltrue) },
 	} ;
 	CK_MECHANISM mech = {

@@ -241,6 +241,7 @@ func (ks *hsmBasedKeyStore) StoreKey(k bccsp.Key) (err error) {
 }
 
 func (ks *hsmBasedKeyStore) getSuffix(alias string) string {
+	rc := ""
 	files, _ := ioutil.ReadDir(ks.path)
 	for _, f := range files {
 		if strings.HasPrefix(f.Name(), alias) {
@@ -248,7 +249,9 @@ func (ks *hsmBasedKeyStore) getSuffix(alias string) string {
 				return "sk"
 			}
 			if strings.HasSuffix(f.Name(), "pk") {
-				return "pk"
+				// Try to find the matching private key
+				rc = "pk"
+				continue
 			}
 			if strings.HasSuffix(f.Name(), "key") {
 				return "key"
@@ -256,7 +259,7 @@ func (ks *hsmBasedKeyStore) getSuffix(alias string) string {
 			break
 		}
 	}
-	return ""
+	return rc
 }
 
 func (ks *hsmBasedKeyStore) storePrivateKey(alias string, raw []byte) error {

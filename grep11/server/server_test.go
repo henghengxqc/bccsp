@@ -27,8 +27,8 @@ import (
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 
-	pb "github.com/vpaprots/bccsp/grep11/protos"
 	"github.com/stretchr/testify/assert"
+	pb "github.com/vpaprots/bccsp/grep11/protos"
 )
 
 var (
@@ -74,7 +74,8 @@ func TestMain(m *testing.M) {
 
 	Store = s.Name()
 
-	CreateTestServer(Address, Port, Store)
+	// VP: Change to false.. think about testing also with true..
+	CreateTestServer(Address, Port, Store, true)
 
 	ret := m.Run()
 	cleanKnownSessions(Store)

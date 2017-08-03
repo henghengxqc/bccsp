@@ -41,7 +41,7 @@ CK_RV login ( CK_UTF8CHAR_PTR pin,      CK_ULONG pinlen,
 
 CK_RV logout ( CK_UTF8CHAR_PTR pin,      CK_ULONG pinlen);
 
-CK_RV generateKeyPair (
+CK_RV generateKeyPair (     unsigned char *oid,       size_t olen,
                       const unsigned char *pinblob,       size_t pinbloblen,
                             unsigned char *key,       size_t *klen,
                             unsigned char *pubkey,    size_t *pklen);
@@ -78,10 +78,10 @@ func init() {
 	C.m_init()
 }
 
-func Start(address, port, store string) {
+func Start(address, port, store string, fallback bool) {
 	cleanKnownSessions(store)
 
-	m := &grep11Manager{address, port, store}
+	m := &grep11Manager{address, port, store, fallback}
 
 	lis, err := net.Listen("tcp", m.address+":"+m.port)
 	if err != nil {
@@ -94,27 +94,39 @@ func Start(address, port, store string) {
 }
 
 type grep11Manager struct {
-	address string
-	port    string
-	store   string
+	address         string
+	port            string
+	store           string
+	sessionFallback bool
 }
 
 func (m *grep11Manager) Load(c context.Context, loadInfo *pb.LoadInfo) (*pb.LoadStatus, error) {
 	rc := &pb.LoadStatus{}
 	server := &grep11Server{}
 
-	rv := C.login((*C.CK_UTF8CHAR)(unsafe.Pointer(&loadInfo.Pin[0])), C.CK_ULONG(len(loadInfo.Pin)),
-		(*C.uchar)(unsafe.Pointer(&loadInfo.Nonce[0])), C.size_t(len(loadInfo.Nonce)),
-		(*C.uchar)(unsafe.Pointer(&server.pinblob[0])), (*C.size_t)(unsafe.Pointer(&server.pinbloblen)))
-	if rv != C.CKR_OK {
-		logger.Errorf("m_Login returned 0x%x\n", rv)
-		rc.Error = fmt.Sprintf("m_Login returned 0x%x\n", rv)
-		return rc, fmt.Errorf("m_Login returned 0x%x\n", rv)
-	}
+	pin := (*C.CK_UTF8CHAR)(unsafe.Pointer(&loadInfo.Pin[0]))
+	pinLen := C.CK_ULONG(len(loadInfo.Pin))
+	nonce := (*C.uchar)(unsafe.Pointer(&loadInfo.Nonce[0]))
+	nonceLen := C.size_t(len(loadInfo.Nonce))
+	pinBlob := (*C.uchar)(unsafe.Pointer(&server.pinblob[0]))
+	pinBlobLen := (*C.size_t)(unsafe.Pointer(&server.pinbloblen))
 
-	err := logSession(m.store, server.pinblob[:server.pinbloblen])
-	if err != nil {
-		logger.Warningf("Error recording pin %s [%s]", loadInfo.Pin, err)
+	rv := C.login(pin, pinLen, nonce, nonceLen, pinBlob, pinBlobLen)
+
+	if m.sessionFallback && rv == C.CKR_FUNCTION_FAILED {
+		logger.Warningf("m_Login returned 0x%x CKR_FUNCTION_FAILED, assuming that we ran out of sessions, falling back to Domain Key encryption \n", rv)
+		rc.Session = false
+		server.pinbloblen = 0
+	} else if rv != C.CKR_OK {
+		rc.Error = fmt.Sprintf("m_Login returned 0x%x\n", rv)
+		logger.Errorf(rc.Error)
+		return rc, fmt.Errorf(rc.Error)
+	} else {
+		rc.Session = true
+		err := logSession(m.store, server.pinblob[:server.pinbloblen])
+		if err != nil {
+			logger.Warningf("Error recording pin %s [%s]", loadInfo.Pin, err)
+		}
 	}
 
 	lis, err := net.Listen("tcp", m.address+":0")
@@ -131,7 +143,11 @@ func (m *grep11Manager) Load(c context.Context, loadInfo *pb.LoadInfo) (*pb.Load
 	rc.Address = lis.Addr().String()
 	server.logger = flogging.MustGetLogger("grep11server_" + rc.Address)
 
-	logger.Infof("Listening on %s for pin %s", rc.Address, loadInfo.Pin)
+	if rc.Session {
+		logger.Infof("Listening on %s for pin %s", rc.Address, loadInfo.Pin)
+	} else {
+		logger.Infof("Listening on %s with Master Key", rc.Address)
+	}
 
 	return rc, err
 }
@@ -144,22 +160,36 @@ type grep11Server struct {
 
 func (s *grep11Server) GenerateECKey(c context.Context, generateInfo *pb.GenerateInfo) (*pb.GenerateStatus, error) {
 	rc := &pb.GenerateStatus{}
-	var keylen int = 1024
-	var pubkeylen int = 1024
-	keyblob := make([]byte, keylen)
-	pubkeyblob := make([]byte, pubkeylen)
+	var keyLen int = 1024
+	var pubKeyLen int = 1024
+	keyBlob := make([]byte, keyLen)
+	pubKeyBlob := make([]byte, pubKeyLen)
 
-	rv := C.generateKeyPair((*C.uchar)(unsafe.Pointer(&s.pinblob[0])), C.size_t(s.pinbloblen),
-		(*C.uchar)(unsafe.Pointer(&keyblob[0])), (*C.size_t)(unsafe.Pointer(&keylen)),
-		(*C.uchar)(unsafe.Pointer(&pubkeyblob[0])), (*C.size_t)(unsafe.Pointer(&pubkeylen)))
-	if rv != C.CKR_OK {
-		logger.Errorf("m_GenerateKeyPair returned 0x%x\n", rv)
-		rc.Error = fmt.Sprintf("m_GenerateKeyPair returned 0x%x\n", rv)
-		return rc, fmt.Errorf("m_GenerateKeyPair returned 0x%x\n", rv)
+	oid := (*C.uchar)(unsafe.Pointer(&generateInfo.Oid[0]))
+	oidLen := C.size_t(len(generateInfo.Oid))
+	keyBlobC := (*C.uchar)(unsafe.Pointer(&keyBlob[0]))
+	keyBlobCLen := (*C.size_t)(unsafe.Pointer(&keyLen))
+	pubKeyBlobC := (*C.uchar)(unsafe.Pointer(&pubKeyBlob[0]))
+	pubKeyBlobCLen := (*C.size_t)(unsafe.Pointer(&pubKeyLen))
+	pinBlobLen := C.size_t(s.pinbloblen)
+	pinBlob := (*C.uchar)(unsafe.Pointer(&s.pinblob[0]))
+
+	if s.pinbloblen == 0 { //This is true for fallback to Master Key wrapping
+		var noBlob []byte
+		noBlob = nil
+		pinBlob = (*C.uchar)(unsafe.Pointer(&noBlob))
 	}
 
-	rc.PrivKey = keyblob[:keylen]
-	rc.PubKey = pubkeyblob[:pubkeylen]
+	rv := C.generateKeyPair(oid, oidLen, pinBlob, pinBlobLen, keyBlobC, keyBlobCLen, pubKeyBlobC, pubKeyBlobCLen)
+
+	if rv != C.CKR_OK {
+		rc.Error = fmt.Sprintf("m_GenerateKeyPair returned 0x%x\n", rv)
+		logger.Errorf(rc.Error)
+		return rc, fmt.Errorf(rc.Error)
+	}
+
+	rc.PrivKey = keyBlob[:keyLen]
+	rc.PubKey = pubKeyBlob[:pubKeyLen]
 	rc.Error = ""
 	return rc, nil
 }
@@ -206,12 +236,7 @@ func (s *grep11Server) VerifyP11ECDSA(c context.Context, verifyInfo *pb.VerifyIn
 	return rc, nil
 }
 
-func (s *grep11Server) ImportECKey(c context.Context, verifyInfo *pb.ImportInfo) (*pb.ImportStatus, error) {
-	rc := &pb.ImportStatus{}
-	return rc, nil
-}
-
-func CreateTestServer(address, port, store string) {
-	go Start(address, port, store)
+func CreateTestServer(address, port, store string, fallback bool) {
+	go Start(address, port, store, fallback)
 	time.Sleep(1000 * time.Microsecond)
 }
