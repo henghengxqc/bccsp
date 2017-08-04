@@ -74,8 +74,7 @@ func TestMain(m *testing.M) {
 
 	Store = s.Name()
 
-	// VP: Change to false.. think about testing also with true..
-	CreateTestServer(Address, Port, Store, true)
+	CreateTestServer(Address, Port, Store, (1<<30)+5)
 
 	ret := m.Run()
 	cleanKnownSessions(Store)

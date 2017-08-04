@@ -76,7 +76,7 @@ func New(opts GREP11Opts, fallbackKS bccsp.KeyStore) (bccsp.BCCSP, error) {
 		return nil, fmt.Errorf("Failed generating Pin and Nonce for the EP11 session [%s]", err)
 	}
 
-	if !isNewPin && pin == nil && nonce == nil {
+	if !isNewPin && len(pin) == 0 && len(nonce) == 0 {
 		logger.Warningf("Starting GREP11 BCCSP without a session! Using Domain Master key to encrypt/decrypt key material.")
 		//TODO: We could attempt to log in with a new session at this point
 		//      if that were to succeed, rewrap keys with new session
@@ -86,7 +86,7 @@ func New(opts GREP11Opts, fallbackKS bccsp.KeyStore) (bccsp.BCCSP, error) {
 
 	r, err := m.Load(context.Background(), &pb.LoadInfo{pin, nonce})
 	if err != nil {
-		return nil, fmt.Errorf("Could not remote-load PKCS11 library [%s]\n Remote Response: <%+v>", err, r)
+		return nil, fmt.Errorf("Could not remote-load EP11 library [%s]\n Remote Response: <%+v>", err, r)
 	}
 	if r.Error != "" {
 		return nil, fmt.Errorf("Remote Load call reports error: %s", r.Error)
@@ -94,7 +94,7 @@ func New(opts GREP11Opts, fallbackKS bccsp.KeyStore) (bccsp.BCCSP, error) {
 
 	if r.Session == false {
 		// Ran out of sessions!!
-		if !isNewPin && pin != nil && nonce != nil {
+		if !isNewPin && len(pin) != 0 && len(nonce) != 0 {
 			// This is bad! Existing keys are inaccessible.
 			return nil, fmt.Errorf("Failed to log in into EP11 session. Crypto material inaccessible.")
 		}
@@ -211,13 +211,13 @@ func (csp *impl) KeyImport(raw interface{}, opts bccsp.KeyImportOpts) (k bccsp.K
 		return nil, err
 	}
 
-	if swK.Private() {
-		return nil, errors.New("Importing Private Key into GREP11 provider is not allowed.")
-	}
-
 	if swK.Symmetric() {
 		// No support for symmetric keys yet, use clear keys for now
 		return swK, nil
+	}
+
+	if swK.Private() {
+		return nil, errors.New("Importing Private Key into GREP11 provider is not allowed.")
 	}
 
 	// Must be public key, see if its an ECDSA key
@@ -273,6 +273,8 @@ func (csp *impl) Sign(k bccsp.Key, digest []byte, opts bccsp.SignerOpts) (signat
 	switch k.(type) {
 	case *ecdsaPrivateKey:
 		return csp.signECDSA(*k.(*ecdsaPrivateKey), digest, opts)
+	case *ecdsaPublicKey:
+		return nil, errors.New("Cannot sign with a grep11.ecdsaPublicKey")
 	default:
 		return csp.BCCSP.Sign(k, digest, opts)
 	}

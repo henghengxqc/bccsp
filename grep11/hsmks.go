@@ -246,14 +246,16 @@ func (ks *hsmBasedKeyStore) getSuffix(alias string) string {
 	for _, f := range files {
 		if strings.HasPrefix(f.Name(), alias) {
 			if strings.HasSuffix(f.Name(), "sk") {
+				// Found private key
 				return "sk"
 			}
 			if strings.HasSuffix(f.Name(), "pk") {
-				// Try to find the matching private key
+				// Found public key, try to find matching private key instead
 				rc = "pk"
 				continue
 			}
 			if strings.HasSuffix(f.Name(), "key") {
+				// Found symmetric key
 				return "key"
 			}
 			break
@@ -367,6 +369,22 @@ func blobToPubKey(pubKey []byte, curve asn1.ObjectIdentifier) ([]byte, *ecdsa.Pu
 }
 
 func pubKeyToBlob(pubKey *ecdsa.PublicKey) ([]byte, error) {
-	//elliptic.Marshal
-	return nil, nil
+	oid, ok := oidFromNamedCurve(pubKey.Curve)
+	point := elliptic.Marshal(pubKey.Curve, pubKey.X, pubKey.Y)
+	if !ok {
+		return nil, fmt.Errorf("Curve not recognized")
+	}
+
+	encode := &PubKeyASN{
+		Ident: EckeyIdentASN{
+			KeyType: asn1.ObjectIdentifier{1, 2, 840, 10045, 2, 1}, //ecPublicKey
+			Curve:   oid,
+		},
+		Point: asn1.BitString{
+			Bytes:     point,
+			BitLength: len(point) * 8,
+		},
+	}
+
+	return asn1.Marshal(*encode)
 }

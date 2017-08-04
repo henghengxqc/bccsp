@@ -96,6 +96,20 @@ func (csp *impl) generateECKey(curve asn1.ObjectIdentifier, ephemeral bool) (*ec
 		return nil, fmt.Errorf("Failed Unmarshaling Public Key [%s]", err)
 	}
 
+	/* VP DELETE Verifying pub key generation from soft key
+	ioutil.WriteFile("/tmp/pub.asn1", k.PubKey, 0644)
+	checkBlob, err := pubKeyToBlob(pubGoKey)
+	if err != nil {
+		return nil, fmt.Errorf("Well this is strange! [%s]", err)
+	}
+
+	if bytes.Equal(k.PubKey, checkBlob) {
+		logger.Fatalf("VP>>>>>>>>>>>>>>>>>>>>>>>> That was too easy?")
+	} else {
+		logger.Fatalf("Keys mismatch\nExpected:\n%s\nGenerated:\n%s", hex.Dump(k.PubKey), hex.Dump(checkBlob))
+	}
+	//endDELETE */
+
 	key := &ecdsaPrivateKey{ski, k.PrivKey, &ecdsaPublicKey{ski, k.PubKey, pubGoKey}}
 	return key, nil
 }

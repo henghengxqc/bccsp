@@ -49,8 +49,8 @@ func main() {
 	address := viper.GetString("grep11.address")
 	port := viper.GetString("grep11.port")
 	store := viper.GetString("grep11.store")
-	fallback := viper.GetBool("grep11.no-sessions")
+	sessionLimit := viper.GetInt("grep11.sessionLimit")
 
-	server.Start(address, port, store, fallback)
+	server.Start(address, port, store, sessionLimit)
 
 }

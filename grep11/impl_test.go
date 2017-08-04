@@ -41,7 +41,7 @@ import (
 	"github.com/hyperledger/fabric/bccsp/utils"
 	"github.com/op/go-logging"
 	"github.com/stretchr/testify/assert"
-	//server "github.com/vpaprots/bccsp/grep11/server"
+	"github.com/vpaprots/bccsp/grep11/server"
 	"golang.org/x/crypto/sha3"
 )
 
@@ -62,8 +62,6 @@ func TestMain(m *testing.M) {
 	// Activate DEBUG level to cover listAttrs function
 	logging.SetLevel(logging.DEBUG, "bccsp_ep11")
 
-	//server.CreateTestServer()
-
 	storePath, err := ioutil.TempDir("", "hsmKeystore")
 	if err != nil {
 		fmt.Printf("Failed gettin a temporary key store path [%s]", err)
@@ -80,16 +78,26 @@ func TestMain(m *testing.M) {
 
 	tests := []testConfig{
 		{256, "SHA2", true, true},
+		/* No HSM Verify implemented yet
 		{256, "SHA3", false, true},
 		{384, "SHA2", false, true},
-		{384, "SHA3", false, true},
+		{384, "SHA3", false, true},*/
 		{384, "SHA3", true, true},
 	}
 
 	opts := GREP11Opts{
-		Address: "9.47.152.121",
+		Address: "localhost",
 		Port:    "9876",
 	}
+
+	pinStorePath, err := ioutil.TempFile("", "hsmPinstore")
+	if err != nil {
+		fmt.Printf("Failed getting a temporary key store path [%s]", err)
+		os.Exit(-1)
+	}
+
+	server.CreateTestServer(opts.Address, opts.Port, pinStorePath.Name(), 0)
+
 	for _, config := range tests {
 		var err error
 		currentTestConfig = config

@@ -36,11 +36,12 @@ package server
 
 
 static uint64_t ep11tok_target = 0x0000000000000000ull;
+static unsigned char *ep11_pin_blob = NULL;
+static CK_ULONG ep11_pin_blob_len = 0;
 
 CK_RV login ( CK_UTF8CHAR_PTR pin,      CK_ULONG pinlen,
             const unsigned char *nonce,     size_t nlen,
                   unsigned char *pinblob,   size_t *pinbloblen) {
-
 	return m_Login(pin, pinlen, nonce, nlen,
 			pinblob, pinbloblen,
 			(uint64_t)(long)&ep11tok_target);
@@ -72,7 +73,7 @@ CK_RV generateKeyPair (     unsigned char *oid,       size_t olen,
 	return m_GenerateKeyPair(&mech,
 		   puba, sizeof(puba)/sizeof(CK_ATTRIBUTE),
 		   prva, sizeof(prva)/sizeof(CK_ATTRIBUTE),
-		   pinblob, pinbloblen,
+		   pinbloblen == 0 ? ep11_pin_blob : pinblob, pinbloblen,
 		   key, klen, pubkey, pklen,
 		   (uint64_t)(long)&ep11tok_target);
 }

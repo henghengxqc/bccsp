@@ -123,9 +123,14 @@ func logSession(store string, pin []byte) error {
 
 	encodedpin := base64.StdEncoding.EncodeToString(pin)
 	_, err = file.WriteString(encodedpin)
-	logger.Debugf(">>>>>> Logging %s [%s]", encodedpin, err)
+	logger.Debugf("Logging %s [%s]", encodedpin, err)
 	file.Write([]byte("\n"))
 	file.Sync()
 	file.Close()
 	return nil
+}
+
+func currentSessions() int {
+	//TODO: query the card for available sessions
+	return 1 << 30
 }

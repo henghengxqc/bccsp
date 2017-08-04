@@ -78,10 +78,10 @@ func init() {
 	C.m_init()
 }
 
-func Start(address, port, store string, fallback bool) {
+func Start(address, port, store string, sessionLimit int) {
 	cleanKnownSessions(store)
 
-	m := &grep11Manager{address, port, store, fallback}
+	m := &grep11Manager{address, port, store, sessionLimit}
 
 	lis, err := net.Listen("tcp", m.address+":"+m.port)
 	if err != nil {
@@ -94,39 +94,43 @@ func Start(address, port, store string, fallback bool) {
 }
 
 type grep11Manager struct {
-	address         string
-	port            string
-	store           string
-	sessionFallback bool
+	address      string
+	port         string
+	store        string
+	sessionLimit int
 }
 
 func (m *grep11Manager) Load(c context.Context, loadInfo *pb.LoadInfo) (*pb.LoadStatus, error) {
 	rc := &pb.LoadStatus{}
 	srvr := &grep11Server{}
+	sessionCount := currentSessions()
+	logger.Debugf("We already have %d sessions and session limit is set to %d", sessionCount, m.sessionLimit)
 
-	pin := (*C.CK_UTF8CHAR)(unsafe.Pointer(&loadInfo.Pin[0]))
-	pinLen := C.CK_ULONG(len(loadInfo.Pin))
-	nonce := (*C.uchar)(unsafe.Pointer(&loadInfo.Nonce[0]))
-	nonceLen := C.size_t(len(loadInfo.Nonce))
-	pinBlob := (*C.uchar)(unsafe.Pointer(&srvr.pinblob[0]))
-	pinBlobLen := (*C.size_t)(unsafe.Pointer(&srvr.pinbloblen))
+	if sessionCount < m.sessionLimit {
+		pin := (*C.CK_UTF8CHAR)(unsafe.Pointer(&loadInfo.Pin[0]))
+		pinLen := C.CK_ULONG(len(loadInfo.Pin))
+		nonce := (*C.uchar)(unsafe.Pointer(&loadInfo.Nonce[0]))
+		nonceLen := C.size_t(len(loadInfo.Nonce))
+		pinBlob := (*C.uchar)(unsafe.Pointer(&srvr.pinblob[0]))
+		pinBlobLen := (*C.size_t)(unsafe.Pointer(&srvr.pinbloblen))
 
-	rv := C.login(pin, pinLen, nonce, nonceLen, pinBlob, pinBlobLen)
+		rv := C.login(pin, pinLen, nonce, nonceLen, pinBlob, pinBlobLen)
 
-	if m.sessionFallback && rv == C.CKR_FUNCTION_FAILED {
-		logger.Warningf("m_Login returned 0x%x CKR_FUNCTION_FAILED, assuming that we ran out of sessions, falling back to Domain Key encryption \n", rv)
+		if rv != C.CKR_OK {
+			rc.Error = fmt.Sprintf("m_Login returned 0x%x\n", rv)
+			logger.Errorf(rc.Error)
+			return rc, fmt.Errorf(rc.Error)
+		} else {
+			rc.Session = true
+			err := logSession(m.store, srvr.pinblob[:srvr.pinbloblen])
+			if err != nil {
+				logger.Warningf("Error recording pin %s [%s]", loadInfo.Pin, err)
+			}
+		}
+	} else {
+		logger.Warningf("Not using EP11 sessions, falling back to Domain Key encryption\n")
 		rc.Session = false
 		srvr.pinbloblen = 0
-	} else if rv != C.CKR_OK {
-		rc.Error = fmt.Sprintf("m_Login returned 0x%x\n", rv)
-		logger.Errorf(rc.Error)
-		return rc, fmt.Errorf(rc.Error)
-	} else {
-		rc.Session = true
-		err := logSession(m.store, srvr.pinblob[:srvr.pinbloblen])
-		if err != nil {
-			logger.Warningf("Error recording pin %s [%s]", loadInfo.Pin, err)
-		}
 	}
 
 	lis, err := net.Listen("tcp", m.address+":0")
@@ -179,13 +183,6 @@ func (s *grep11Server) GenerateECKey(c context.Context, generateInfo *pb.Generat
 	pubKeyBlobCLen := (*C.size_t)(unsafe.Pointer(&pubKeyLen))
 	pinBlobLen := C.size_t(s.pinbloblen)
 	pinBlob := (*C.uchar)(unsafe.Pointer(&s.pinblob[0]))
-
-
-	if s.pinbloblen == 0 { //This is true for fallback to Master Key wrapping
-		var noBlob []byte
-		noBlob = nil
-		pinBlob = (*C.uchar)(unsafe.Pointer(&noBlob))
-	}
 
 	rv := C.generateKeyPair(oid, oidLen, pinBlob, pinBlobLen, keyBlobC, keyBlobCLen, pubKeyBlobC, pubKeyBlobCLen)
 
@@ -283,7 +280,7 @@ func (s *grep11Server) VerifyP11ECDSA(c context.Context, verifyInfo *pb.VerifyIn
 	return rc, nil
 }
 
-func CreateTestServer(address, port, store string, fallback bool) {
-	go Start(address, port, store, fallback)
+func CreateTestServer(address, port, store string, sessionLimit int) {
+	go Start(address, port, store, sessionLimit)
 	time.Sleep(1000 * time.Microsecond)
 }

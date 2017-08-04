@@ -87,17 +87,12 @@ type GREP11Opts struct {
 	HashFamily string `mapstructure:"hash" json:"hash"`
 
 	// Keystore options
-	Ephemeral     bool               `mapstructure:"tempkeys,omitempty" json:"tempkeys,omitempty"`
-	FileKeystore  *FileKeystoreOpts  `mapstructure:"filekeystore,omitempty" json:"filekeystore,omitempty"`
-	DummyKeystore *DummyKeystoreOpts `mapstructure:"dummykeystore,omitempty" json:"dummykeystore,omitempty"`
+	FileKeystore *FileKeystoreOpts `mapstructure:"filekeystore,omitempty" json:"filekeystore,omitempty"`
 
 	Address string `mapstructure:"address" json:"library"`
 	Port    string `mapstructure:"port" json:"library"`
 
-	// PKCS11 options
-	Label      string `mapstructure:"label" json:"label"`
-	Pin        string `mapstructure:"pin" json:"pin"`
-	SoftVerify bool   `mapstructure:"softwareverify,omitempty" json:"softwareverify,omitempty"`
+	SoftVerify bool `mapstructure:"softwareverify,omitempty" json:"softwareverify,omitempty"`
 }
 
 // Since currently only ECDSA operations go to PKCS11, need a keystore still
@@ -105,5 +100,3 @@ type GREP11Opts struct {
 type FileKeystoreOpts struct {
 	KeyStorePath string `mapstructure:"keystore" json:"keystore" yaml:"KeyStore"`
 }
-
-type DummyKeystoreOpts struct{}
