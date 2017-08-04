@@ -246,3 +246,183 @@ func TestNonExistentStore(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no such file or directory")
 }
+
+func TestSignInvalidParms(t *testing.T) {
+	conn, err := grpc.Dial(Address+":"+Port, grpc.WithInsecure())
+	if err != nil {
+		t.Fatalf("did not connect: %v", err)
+	}
+	defer conn.Close()
+	m := pb.NewGrep11ManagerClient(conn)
+
+	pin, err := genPin()
+	if err != nil {
+		t.Fatalf("Could not generate pin %s", err)
+	}
+	nonce, err := getNonce()
+	if err != nil {
+		t.Fatalf("Could not generate nonce %s", err)
+	}
+
+	r, err := m.Load(context.Background(), &pb.LoadInfo{pin, nonce})
+	if err != nil {
+		t.Fatalf("could not greet: %v", err)
+	}
+
+	conn, err = grpc.Dial(r.Address, grpc.WithInsecure())
+	if err != nil {
+		t.Fatalf("did not connect: %v", err)
+	}
+	defer conn.Close()
+	t.Logf("Connected to %s", r.Address)
+
+	s := pb.NewGrep11Client(conn)
+
+	oidNamedCurveP256 := asn1.ObjectIdentifier{1, 2, 840, 10045, 3, 1, 7}
+	marshaledOID, err := asn1.Marshal(oidNamedCurveP256)
+	if err != nil {
+		t.Fatalf("Could not marshal OID [%s]", err.Error())
+	}
+	k, err := s.GenerateECKey(context.Background(), &pb.GenerateInfo{marshaledOID})
+	if err != nil {
+		t.Fatalf("Failed generating ECDSA key [%s]", err)
+	}
+	if k.Error != "" {
+		t.Fatalf("Server returned error [%s]", k.Error)
+	}
+
+	msg := []byte("Hello World")
+	digest := sha256.Sum256(msg)
+
+	// Test using an invalid private key
+	badPrivKey := make([]byte, 5)
+	_, err = s.SignP11ECDSA(context.Background(), &pb.SignInfo{badPrivKey, digest[:]})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "m_SignSingle returned")
+
+	// Test using an empty private key
+	_, err = s.SignP11ECDSA(context.Background(), &pb.SignInfo{nil, digest[:]})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Encountered an invalid private key")
+
+	// Test using an empty hash
+	_, err = s.SignP11ECDSA(context.Background(), &pb.SignInfo{k.PrivKey, nil})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Encountered an invalid hash")
+}
+
+func TestVerifyInvalidParms(t *testing.T) {
+	conn, err := grpc.Dial(Address+":"+Port, grpc.WithInsecure())
+	if err != nil {
+		t.Fatalf("did not connect: %v", err)
+	}
+	defer conn.Close()
+	m := pb.NewGrep11ManagerClient(conn)
+
+	pin, err := genPin()
+	if err != nil {
+		t.Fatalf("Could not generate pin %s", err)
+	}
+	nonce, err := getNonce()
+	if err != nil {
+		t.Fatalf("Could not generate nonce %s", err)
+	}
+
+	r, err := m.Load(context.Background(), &pb.LoadInfo{pin, nonce})
+	if err != nil {
+		t.Fatalf("could not greet: %v", err)
+	}
+
+	conn, err = grpc.Dial(r.Address, grpc.WithInsecure())
+	if err != nil {
+		t.Fatalf("did not connect: %v", err)
+	}
+	defer conn.Close()
+	t.Logf("Connected to %s", r.Address)
+
+	s := pb.NewGrep11Client(conn)
+
+	oidNamedCurveP256 := asn1.ObjectIdentifier{1, 2, 840, 10045, 3, 1, 7}
+	marshaledOID, err := asn1.Marshal(oidNamedCurveP256)
+	if err != nil {
+		t.Fatalf("Could not marshal OID [%s]", err.Error())
+	}
+	k, err := s.GenerateECKey(context.Background(), &pb.GenerateInfo{marshaledOID})
+	if err != nil {
+		t.Fatalf("Failed generating ECDSA key [%s]", err)
+	}
+	if k.Error != "" {
+		t.Fatalf("Server returned error [%s]", k.Error)
+	}
+
+	msg := []byte("Hello World")
+	digest := sha256.Sum256(msg)
+
+	signature, err := s.SignP11ECDSA(context.Background(), &pb.SignInfo{k.PrivKey, digest[:]})
+	if err != nil {
+		t.Fatalf("Failed generating ECDSA signature [%s]", err)
+	}
+	if signature.Error != "" {
+		t.Fatalf("Server returned error [%s]", signature.Error)
+	}
+	if len(signature.Sig) == 0 {
+		t.Fatal("Failed generating ECDSA key. Signature must be different from nil")
+	}
+
+	// Test invalid public key
+	badPubKey := make([]byte, 5)
+	_, err = s.VerifyP11ECDSA(context.Background(), &pb.VerifyInfo{badPubKey, digest[:], signature.Sig})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "m_VerifySingle returned")
+
+	// Test empty public key
+	_, err = s.VerifyP11ECDSA(context.Background(), &pb.VerifyInfo{nil, digest[:], signature.Sig})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Encountered an invalid public key")
+
+	// Test empty hash
+	_, err = s.VerifyP11ECDSA(context.Background(), &pb.VerifyInfo{k.PubKey, nil, signature.Sig})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Encountered an invalid hash value")
+
+	// Test empty signature
+	_, err = s.VerifyP11ECDSA(context.Background(), &pb.VerifyInfo{k.PubKey, digest[:], nil})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Encountered an invalid signature")
+}
+
+func TestGenerateECKeyInvalidParm(t *testing.T) {
+	conn, err := grpc.Dial(Address+":"+Port, grpc.WithInsecure())
+	if err != nil {
+		t.Fatalf("did not connect: %v", err)
+	}
+	defer conn.Close()
+	m := pb.NewGrep11ManagerClient(conn)
+
+	pin, err := genPin()
+	if err != nil {
+		t.Fatalf("Could not generate pin %s", err)
+	}
+	nonce, err := getNonce()
+	if err != nil {
+		t.Fatalf("Could not generate nonce %s", err)
+	}
+
+	r, err := m.Load(context.Background(), &pb.LoadInfo{pin, nonce})
+	if err != nil {
+		t.Fatalf("could not greet: %v", err)
+	}
+
+	conn, err = grpc.Dial(r.Address, grpc.WithInsecure())
+	if err != nil {
+		t.Fatalf("did not connect: %v", err)
+	}
+	defer conn.Close()
+	t.Logf("Connected to %s", r.Address)
+
+	s := pb.NewGrep11Client(conn)
+
+	_, err = s.GenerateECKey(context.Background(), &pb.GenerateInfo{nil})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Encountered an invalid OID parameter")
+}

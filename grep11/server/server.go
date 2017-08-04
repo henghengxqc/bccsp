@@ -102,28 +102,28 @@ type grep11Manager struct {
 
 func (m *grep11Manager) Load(c context.Context, loadInfo *pb.LoadInfo) (*pb.LoadStatus, error) {
 	rc := &pb.LoadStatus{}
-	server := &grep11Server{}
+	srvr := &grep11Server{}
 
 	pin := (*C.CK_UTF8CHAR)(unsafe.Pointer(&loadInfo.Pin[0]))
 	pinLen := C.CK_ULONG(len(loadInfo.Pin))
 	nonce := (*C.uchar)(unsafe.Pointer(&loadInfo.Nonce[0]))
 	nonceLen := C.size_t(len(loadInfo.Nonce))
-	pinBlob := (*C.uchar)(unsafe.Pointer(&server.pinblob[0]))
-	pinBlobLen := (*C.size_t)(unsafe.Pointer(&server.pinbloblen))
+	pinBlob := (*C.uchar)(unsafe.Pointer(&srvr.pinblob[0]))
+	pinBlobLen := (*C.size_t)(unsafe.Pointer(&srvr.pinbloblen))
 
 	rv := C.login(pin, pinLen, nonce, nonceLen, pinBlob, pinBlobLen)
 
 	if m.sessionFallback && rv == C.CKR_FUNCTION_FAILED {
 		logger.Warningf("m_Login returned 0x%x CKR_FUNCTION_FAILED, assuming that we ran out of sessions, falling back to Domain Key encryption \n", rv)
 		rc.Session = false
-		server.pinbloblen = 0
+		srvr.pinbloblen = 0
 	} else if rv != C.CKR_OK {
 		rc.Error = fmt.Sprintf("m_Login returned 0x%x\n", rv)
 		logger.Errorf(rc.Error)
 		return rc, fmt.Errorf(rc.Error)
 	} else {
 		rc.Session = true
-		err := logSession(m.store, server.pinblob[:server.pinbloblen])
+		err := logSession(m.store, srvr.pinblob[:srvr.pinbloblen])
 		if err != nil {
 			logger.Warningf("Error recording pin %s [%s]", loadInfo.Pin, err)
 		}
@@ -136,12 +136,12 @@ func (m *grep11Manager) Load(c context.Context, loadInfo *pb.LoadInfo) (*pb.Load
 		return rc, fmt.Errorf(rc.Error)
 	}
 	grpcServer := grpc.NewServer()
-	pb.RegisterGrep11Server(grpcServer, server)
+	pb.RegisterGrep11Server(grpcServer, srvr)
 	go grpcServer.Serve(lis)
 
 	rc.Error = ""
 	rc.Address = lis.Addr().String()
-	server.logger = flogging.MustGetLogger("grep11server_" + rc.Address)
+	srvr.logger = flogging.MustGetLogger("grep11server_" + rc.Address)
 
 	if rc.Session {
 		logger.Infof("Listening on %s for pin %s", rc.Address, loadInfo.Pin)
@@ -165,6 +165,12 @@ func (s *grep11Server) GenerateECKey(c context.Context, generateInfo *pb.Generat
 	keyBlob := make([]byte, keyLen)
 	pubKeyBlob := make([]byte, pubKeyLen)
 
+	if generateInfo.Oid == nil {
+		rc.Error = fmt.Sprintf("Encountered an invalid OID parameter [%v]\n", generateInfo.Oid)
+		logger.Errorf(rc.Error)
+		return rc, fmt.Errorf(rc.Error)
+	}
+
 	oid := (*C.uchar)(unsafe.Pointer(&generateInfo.Oid[0]))
 	oidLen := C.size_t(len(generateInfo.Oid))
 	keyBlobC := (*C.uchar)(unsafe.Pointer(&keyBlob[0]))
@@ -173,6 +179,7 @@ func (s *grep11Server) GenerateECKey(c context.Context, generateInfo *pb.Generat
 	pubKeyBlobCLen := (*C.size_t)(unsafe.Pointer(&pubKeyLen))
 	pinBlobLen := C.size_t(s.pinbloblen)
 	pinBlob := (*C.uchar)(unsafe.Pointer(&s.pinblob[0]))
+
 
 	if s.pinbloblen == 0 { //This is true for fallback to Master Key wrapping
 		var noBlob []byte
@@ -200,9 +207,26 @@ func (s *grep11Server) SignP11ECDSA(c context.Context, signInfo *pb.SignInfo) (*
 	var siglen int = 1024
 	sig := make([]byte, siglen)
 
-	rv := C.signSingle((*C.uchar)(unsafe.Pointer(&signInfo.PrivKey[0])), C.size_t(len(signInfo.PrivKey)),
-		C.CK_BYTE_PTR(unsafe.Pointer(&signInfo.Hash[0])), C.CK_ULONG(len(signInfo.Hash)),
-		C.CK_BYTE_PTR(unsafe.Pointer(&sig[0])), C.CK_ULONG_PTR(unsafe.Pointer(&siglen)))
+	if signInfo.PrivKey == nil {
+		rc.Error = fmt.Sprintf("Encountered an invalid private key [%v]\n", signInfo.PrivKey)
+		logger.Errorf(rc.Error)
+		return rc, fmt.Errorf(rc.Error)
+	}
+
+	if signInfo.Hash == nil {
+		rc.Error = fmt.Sprintf("Encountered an invalid hash value [%v]\n", signInfo.Hash)
+		logger.Errorf(rc.Error)
+		return rc, fmt.Errorf(rc.Error)
+	}
+
+	privKey := (*C.uchar)(unsafe.Pointer(&signInfo.PrivKey[0]))
+	privKeyLen := C.size_t(len(signInfo.PrivKey))
+	msgHash := C.CK_BYTE_PTR(unsafe.Pointer(&signInfo.Hash[0]))
+	msgHashLen := C.CK_ULONG(len(signInfo.Hash))
+	signature := C.CK_BYTE_PTR(unsafe.Pointer(&sig[0]))
+	signatureLen := C.CK_ULONG_PTR(unsafe.Pointer(&siglen))
+
+	rv := C.signSingle(privKey, privKeyLen, msgHash, msgHashLen, signature, signatureLen)
 
 	if rv != C.CKR_OK {
 		logger.Errorf("m_SignSingle returned 0x%x\n", rv)
@@ -218,9 +242,32 @@ func (s *grep11Server) SignP11ECDSA(c context.Context, signInfo *pb.SignInfo) (*
 func (s *grep11Server) VerifyP11ECDSA(c context.Context, verifyInfo *pb.VerifyInfo) (*pb.VerifyStatus, error) {
 	rc := &pb.VerifyStatus{}
 
-	rv := C.verifySingle((*C.uchar)(unsafe.Pointer(&verifyInfo.PubKey[0])), C.size_t(len(verifyInfo.PubKey)),
-		C.CK_BYTE_PTR(unsafe.Pointer(&verifyInfo.Hash[0])), C.CK_ULONG(len(verifyInfo.Hash)),
-		C.CK_BYTE_PTR(unsafe.Pointer(&verifyInfo.Sig[0])), C.CK_ULONG(len(verifyInfo.Sig)))
+	if verifyInfo.PubKey == nil {
+		rc.Error = fmt.Sprintf("Encountered an invalid public key [%v]\n", verifyInfo.PubKey)
+		logger.Errorf(rc.Error)
+		return rc, fmt.Errorf(rc.Error)
+	}
+
+	if verifyInfo.Hash == nil {
+		rc.Error = fmt.Sprintf("Encountered an invalid hash value [%v]\n", verifyInfo.Hash)
+		logger.Errorf(rc.Error)
+		return rc, fmt.Errorf(rc.Error)
+	}
+
+	if verifyInfo.Sig == nil {
+		rc.Error = fmt.Sprintf("Encountered an invalid signature [%v]\n", verifyInfo.Sig)
+		logger.Errorf(rc.Error)
+		return rc, fmt.Errorf(rc.Error)
+	}
+
+	pubKey := (*C.uchar)(unsafe.Pointer(&verifyInfo.PubKey[0]))
+	pubKeyLen := C.size_t(len(verifyInfo.PubKey))
+	msgHash := C.CK_BYTE_PTR(unsafe.Pointer(&verifyInfo.Hash[0]))
+	msgHashLen := C.CK_ULONG(len(verifyInfo.Hash))
+	signature := C.CK_BYTE_PTR(unsafe.Pointer(&verifyInfo.Sig[0]))
+	signatureLen := C.CK_ULONG(len(verifyInfo.Sig))
+
+	rv := C.verifySingle(pubKey, pubKeyLen, msgHash, msgHashLen, signature, signatureLen)
 
 	if rv == C.CKR_SIGNATURE_INVALID {
 		rc.Valid = false

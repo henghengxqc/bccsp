@@ -56,7 +56,7 @@ func cleanKnownSessions(store string) error {
 	logger.Infof("Looking for existing sessions in %s", store)
 	var _, err = os.Stat(store)
 	if os.IsNotExist(err) {
-		logger.Infof("No list of existing sessions found in %s", store)
+		logger.Infof("Session store file %s does not exist.", store)
 		return err
 	}
 
