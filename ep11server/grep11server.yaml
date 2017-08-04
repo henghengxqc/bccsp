@@ -1,6 +1,6 @@
 grep11:
   address: localhost
   port: 9876
-  store: /tmp/keystore.tmp
+  store: /tmp/sessionStore.db
   sessionLimit: 0
 

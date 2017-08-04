@@ -40,8 +40,14 @@ func main() {
 	viper.SetConfigType("yaml")
 	viper.AutomaticEnv()
 	viper.AddConfigPath(".")
+	viper.AddConfigPath("/etc/ep11server")
 	replacer := strings.NewReplacer(".", "_")
 	viper.SetEnvKeyReplacer(replacer)
+
+	viper.SetDefault("grep11.address", "localhost")
+	viper.SetDefault("grep11.port", "9876")
+	viper.SetDefault("grep11.store", "/tmp/sessionStore.db")
+	viper.SetDefault("grep11.sessionLimit", 0)
 
 	viper.SetConfigName("grep11server")
 
