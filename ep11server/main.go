@@ -18,6 +18,12 @@ package main
 import (
 	"strings"
 
+	"os"
+	"os/signal"
+	"syscall"
+
+	"fmt"
+
 	"github.com/hyperledger/fabric/common/flogging"
 	logging "github.com/op/go-logging"
 	"github.com/spf13/viper"
@@ -51,6 +57,31 @@ func main() {
 	store := viper.GetString("grep11.store")
 	sessionLimit := viper.GetInt("grep11.sessionLimit")
 
-	server.Start(address, port, store, sessionLimit)
+	serve := make(chan error)
 
+	// Allow the ep11server to receive system signals
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigs
+		logger.Debugf("signal received: %s", sig)
+
+		// Cleanup sessions
+		server.Cleanup(store)
+		serve <- nil
+	}()
+
+	// Start the GRPC server
+	go func() {
+		var grpcErr error
+		logger.Info("Starting EP11 server")
+		if grpcErr = server.Start(address, port, store, sessionLimit); grpcErr != nil {
+			grpcErr = fmt.Errorf("GRPC server exited with error: %s", grpcErr)
+		}
+		serve <- grpcErr
+	}()
+
+	// Terminate EP11 server if system signal or GRPC error occurs
+	<-serve
+	logger.Info("EP11 Server has been shutdown")
 }

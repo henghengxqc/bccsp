@@ -78,7 +78,7 @@ func init() {
 	C.m_init()
 }
 
-func Start(address, port, store string, sessionLimit int) {
+func Start(address, port, store string, sessionLimit int) error {
 	cleanKnownSessions(store)
 
 	m := &grep11Manager{address, port, store, sessionLimit}
@@ -90,7 +90,7 @@ func Start(address, port, store string, sessionLimit int) {
 	logger.Infof("Manager listening on %s", lis.Addr().String())
 	grpcManager := grpc.NewServer()
 	pb.RegisterGrep11ManagerServer(grpcManager, m)
-	grpcManager.Serve(lis)
+	return grpcManager.Serve(lis)
 }
 
 type grep11Manager struct {
@@ -283,4 +283,8 @@ func (s *grep11Server) VerifyP11ECDSA(c context.Context, verifyInfo *pb.VerifyIn
 func CreateTestServer(address, port, store string, sessionLimit int) {
 	go Start(address, port, store, sessionLimit)
 	time.Sleep(1000 * time.Microsecond)
+}
+
+func Cleanup(store string) {
+	cleanKnownSessions(store)
 }
