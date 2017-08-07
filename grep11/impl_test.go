@@ -124,6 +124,23 @@ func TestMain(m *testing.M) {
 	os.Exit(0)
 }
 
+func TestHSMKeyStoreInvalidPubKey(t *testing.T) {
+	hsmKs := &hsmBasedKeyStore{}
+
+	err := hsmKs.storePublicKey("", nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Failed converting public key to PEM")
+}
+
+func TestHSMKeyStoreInvalidPrivateKey(t *testing.T) {
+	t.SkipNow()
+	hsmKs := &hsmBasedKeyStore{}
+
+	err := hsmKs.storePrivateKey("baddir", []byte{0})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Failed storing private key")
+}
+
 func TestHSMKeyStoreReadMethod(t *testing.T) {
 	hsmKS := &hsmBasedKeyStore{}
 
@@ -258,6 +275,12 @@ func TestInvalidSKI(t *testing.T) {
 	if k != nil {
 		t.Fatal("Return value should be equal to nil in this case")
 	}
+}
+
+func TestGenerateECKeyInvalidCurve(t *testing.T) {
+	_, err := currentBCCSP.(*impl).generateECKey(nil, true)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Could not marshal OID")
 }
 
 func TestKeyGenECDSAOpts(t *testing.T) {
@@ -686,6 +709,11 @@ func TestECDSAVerify(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "Invalid digest. Cannot be empty.")
 
+	// Ensure unsupported HSM Verify message occurs here
+	_, err = currentBCCSP.(*impl).verifyP11ECDSA(nil, nil, nil, nil, 0)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Remote Verify is currently not supported.")
+
 	// Import the exported public key
 	pkRaw, err := pk.Bytes()
 	if err != nil {
@@ -1108,6 +1136,12 @@ func TestAESDecrypt(t *testing.T) {
 	if !bytes.Equal(msg, pt) {
 		t.Fatalf("Failed decrypting. Decrypted plaintext is different from the original. [%x][%x]", msg, pt)
 	}
+}
+
+func TestKeyDerivNilKey(t *testing.T) {
+	_, err := currentBCCSP.KeyDeriv(nil, nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Invalid Key. It must not be nil.")
 }
 
 func TestHMACTruncated256KeyDerivOverAES256Key(t *testing.T) {

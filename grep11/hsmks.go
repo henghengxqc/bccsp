@@ -287,7 +287,7 @@ func (ks *hsmBasedKeyStore) storePublicKey(alias string, publicKey interface{}) 
 
 	err = ioutil.WriteFile(ks.getPathForAlias(alias, "pk"), rawKey, 0700)
 	if err != nil {
-		return fmt.Errorf("Failed storing private key [%s]: [%s]", alias, err)
+		return fmt.Errorf("Failed storing public key [%s]: [%s]", alias, err)
 	}
 
 	return nil
