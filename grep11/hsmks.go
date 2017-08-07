@@ -369,6 +369,10 @@ func blobToPubKey(pubKey []byte, curve asn1.ObjectIdentifier) ([]byte, *ecdsa.Pu
 }
 
 func pubKeyToBlob(pubKey *ecdsa.PublicKey) ([]byte, error) {
+	if pubKey == nil {
+		return nil, fmt.Errorf("Value of Public Key was nil")
+	}
+
 	oid, ok := oidFromNamedCurve(pubKey.Curve)
 	point := elliptic.Marshal(pubKey.Curve, pubKey.X, pubKey.Y)
 	if !ok {

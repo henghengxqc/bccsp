@@ -23,6 +23,8 @@ import (
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 
+	"time"
+
 	"github.com/hyperledger/fabric/bccsp"
 	"github.com/hyperledger/fabric/bccsp/sw"
 	"github.com/hyperledger/fabric/bccsp/utils"
@@ -45,17 +47,17 @@ func New(opts GREP11Opts, fallbackKS bccsp.KeyStore) (bccsp.BCCSP, error) {
 		return nil, fmt.Errorf("Failed initializing configuration [%s]", err)
 	}
 
+	// Note: If the fallbackKS is nil, the sw.New function will catch the error
 	swCSP, err := sw.New(opts.SecLevel, opts.HashFamily, fallbackKS)
 	if err != nil {
 		return nil, fmt.Errorf("Failed initializing fallback SW BCCSP [%s]", err)
 	}
 
-	// Check KeyStore
-	if fallbackKS == nil {
-		return nil, errors.New("Invalid bccsp.KeyStore instance. It must be different from nil.")
-	}
+	// Setup timeout context for manager connection
+	mgrCtx, cancelMgrConn := context.WithTimeout(context.Background(), time.Second*2)
+	defer cancelMgrConn()
 
-	conn, err := grpc.Dial(opts.Address+":"+opts.Port, grpc.WithInsecure())
+	conn, err := grpc.DialContext(mgrCtx, opts.Address+":"+opts.Port, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
 		return nil, fmt.Errorf("Failed connecting to GREP11 manager at %s:%s [%s]", opts.Address, opts.Port, err)
 	}
@@ -73,7 +75,7 @@ func New(opts GREP11Opts, fallbackKS bccsp.KeyStore) (bccsp.BCCSP, error) {
 
 	pin, nonce, isNewPin, err := keyStore.getPinAndNonce()
 	if err != nil {
-		return nil, fmt.Errorf("Failed generating Pin and Nonce for the EP11 session [%s]", err)
+		return nil, fmt.Errorf("Failed generating PIN and Nonce for the EP11 session [%s]", err)
 	}
 
 	if !isNewPin && len(pin) == 0 && len(nonce) == 0 {
@@ -108,11 +110,15 @@ func New(opts GREP11Opts, fallbackKS bccsp.KeyStore) (bccsp.BCCSP, error) {
 	if isNewPin {
 		err = keyStore.storePinAndNonce(pin, nonce)
 		if err != nil {
-			return nil, fmt.Errorf("Failed storing pin and nonce [%s]", err)
+			return nil, fmt.Errorf("Failed storing PIN and nonce [%s]", err)
 		}
 	}
 
-	conn, err = grpc.Dial(r.Address, grpc.WithInsecure())
+	// Setup timeout context for server connection
+	srvrCtx, cancelSrvrConn := context.WithTimeout(context.Background(), time.Second*2)
+	defer cancelSrvrConn()
+
+	conn, err = grpc.DialContext(srvrCtx, r.Address, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
 		return nil, fmt.Errorf("Failed connecting to GREP11 dedicated connection at %s [%s]", r.Address, err)
 	}

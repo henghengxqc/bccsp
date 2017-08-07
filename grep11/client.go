@@ -132,21 +132,23 @@ func (csp *impl) signP11ECDSA(keyBlob []byte, msg []byte) (R, S *big.Int, err er
 }
 
 func (csp *impl) verifyP11ECDSA(keyBlob []byte, msg []byte, R, S *big.Int, byteSize int) (valid bool, err error) {
-	r := R.Bytes()
-	s := S.Bytes()
-
-	// Pad front of R and S with Zeroes if needed
-	sig := make([]byte, 2*byteSize)
-	copy(sig[byteSize-len(r):byteSize], r)
-	copy(sig[2*byteSize-len(s):], s)
-
-	val, err := csp.grpc.VerifyP11ECDSA(context.Background(), &pb.VerifyInfo{keyBlob, msg, sig})
-	if err != nil {
-		return false, fmt.Errorf("Could not remote-verify PKCS11 library [%s]\n Remote Response: <%+v>", err, val)
-	}
-	if val.Error != "" {
-		return false, fmt.Errorf("Remote Verify call reports error: %s", val.Error)
-	}
-
-	return val.Valid, nil
+	// TODO: Uncomment when HSM Verify is supported
+	//r := R.Bytes()
+	//s := S.Bytes()
+	//
+	//// Pad front of R and S with Zeroes if needed
+	//sig := make([]byte, 2*byteSize)
+	//copy(sig[byteSize-len(r):byteSize], r)
+	//copy(sig[2*byteSize-len(s):], s)
+	//
+	//val, err := csp.grpc.VerifyP11ECDSA(context.Background(), &pb.VerifyInfo{keyBlob, msg, sig})
+	//if err != nil {
+	//	return false, fmt.Errorf("Could not remote-verify PKCS11 library [%s]\n Remote Response: <%+v>", err, val)
+	//}
+	//if val.Error != "" {
+	//	return false, fmt.Errorf("Remote Verify call reports error: %s", val.Error)
+	//}
+	//
+	//return val.Valid, nil
+	return false, fmt.Errorf("Remote Verify is currently not supported.")
 }

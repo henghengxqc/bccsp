@@ -64,7 +64,7 @@ func TestMain(m *testing.M) {
 
 	storePath, err := ioutil.TempDir("", "hsmKeystore")
 	if err != nil {
-		fmt.Printf("Failed gettin a temporary key store path [%s]", err)
+		fmt.Printf("Failed getting a temporary key store path [%s]", err)
 		os.Exit(-1)
 	}
 	fmt.Printf("Creating a keystore in %s\n", storePath)
@@ -78,10 +78,12 @@ func TestMain(m *testing.M) {
 
 	tests := []testConfig{
 		{256, "SHA2", true, true},
+		{256, "SHA3", true, true},
 		/* No HSM Verify implemented yet
 		{256, "SHA3", false, true},
 		{384, "SHA2", false, true},
 		{384, "SHA3", false, true},*/
+		{384, "SHA2", true, true},
 		{384, "SHA3", true, true},
 	}
 
@@ -122,6 +124,124 @@ func TestMain(m *testing.M) {
 	os.Exit(0)
 }
 
+func TestHSMKeyStoreReadMethod(t *testing.T) {
+	hsmKS := &hsmBasedKeyStore{}
+
+	readOnly := hsmKS.ReadOnly()
+	assert.Equal(t, readOnly, false)
+}
+
+func TestPubToKeyBlobNilPubKey(t *testing.T) {
+	_, err := pubKeyToBlob(nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Value of Public Key was nil")
+}
+
+func TestSHA3InvalidSecurityLevel(t *testing.T) {
+	conf := &config{}
+
+	err := conf.setSecurityLevelSHA3(888)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Security level not supported")
+}
+
+func TestSHA2InvalidSecurityLevel(t *testing.T) {
+	conf := &config{}
+
+	err := conf.setSecurityLevelSHA2(999)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Security level not supported")
+}
+
+func TestNewInvalidHSMKeyStorePath(t *testing.T) {
+	testOpts := GREP11Opts{
+		Address:      "localhost",
+		Port:         "9876",
+		HashFamily:   "SHA2",
+		SecLevel:     256,
+		SoftVerify:   true,
+		FileKeystore: &FileKeystoreOpts{""},
+	}
+	_, err := New(testOpts, currentKS)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Cannot find keystore directory")
+}
+
+func TestNewNilOpts(t *testing.T) {
+	_, err := New(GREP11Opts{}, currentKS)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Failed initializing configuration")
+}
+
+func TestNewNilFallbackKS(t *testing.T) {
+	testStorePath, err := ioutil.TempDir("", "testKeystore")
+	if err != nil {
+		fmt.Printf("Failed getting temporary key store path [%s]", err)
+		os.Exit(-1)
+	}
+	defer os.RemoveAll(testStorePath)
+
+	testOpts := GREP11Opts{
+		Address:      "localhost",
+		Port:         "9876",
+		HashFamily:   "SHA2",
+		SecLevel:     256,
+		SoftVerify:   true,
+		FileKeystore: &FileKeystoreOpts{testStorePath},
+	}
+	_, err = New(testOpts, nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Failed initializing fallback SW BCCSP")
+}
+
+func TestNewNilFileKeyStore(t *testing.T) {
+	testOpts := GREP11Opts{
+		Address:      "localhost",
+		Port:         "9876",
+		HashFamily:   "SHA2",
+		SecLevel:     256,
+		SoftVerify:   true,
+		FileKeystore: nil,
+	}
+	_, err := New(testOpts, currentKS)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "FileKeystore is required to use GREP11 CSP")
+}
+
+func TestNewInvalidAddressPort(t *testing.T) {
+	testStorePath, err := ioutil.TempDir("", "testKeystore")
+	if err != nil {
+		fmt.Printf("Failed getting a temporary key store path [%s]", err)
+		os.Exit(-1)
+	}
+	defer os.RemoveAll(testStorePath)
+
+	testOpts := GREP11Opts{
+		Address:      "badhost",
+		Port:         "9876",
+		HashFamily:   "SHA2",
+		SecLevel:     256,
+		SoftVerify:   true,
+		FileKeystore: &FileKeystoreOpts{testStorePath},
+	}
+
+	t.Logf("GREP11Opts: [%+v]\n", testOpts)
+
+	// Test invalid host
+	_, err = New(testOpts, currentKS)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Failed connecting to GREP11 manager")
+
+	//Test invalid port
+	testOpts.Port = "badport"
+
+	t.Logf("GREP11Opts: [%+v]\n", testOpts)
+
+	_, err = New(testOpts, currentKS)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Failed connecting to GREP11 manager")
+}
+
 func TestInvalidSKI(t *testing.T) {
 	k, err := currentBCCSP.GetKey(nil)
 	if err == nil {
@@ -160,6 +280,10 @@ func TestKeyGenECDSAOpts(t *testing.T) {
 	if elliptic.P256() != ecdsaKey.pub.Curve {
 		t.Fatal("P256 generated key in invalid. The curve must be P256.")
 	}
+
+	// Test PublicKey Method
+	ecdsaPubKey, err := k.(*ecdsaPrivateKey).pub.PublicKey()
+	assert.Equal(t, ecdsaPubKey, ecdsaKey)
 
 	// Curve P384
 	k, err = currentBCCSP.KeyGen(&bccsp.ECDSAP384KeyGenOpts{Temporary: false})
@@ -490,17 +614,28 @@ func TestECDSASign(t *testing.T) {
 		t.Fatal("Failed generating ECDSA key. Signature must be different from nil")
 	}
 
+	// Test nil key
 	_, err = currentBCCSP.Sign(nil, digest, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "Invalid Key. It must not be nil.")
 
+	// Test nil digest
 	_, err = currentBCCSP.Sign(k, nil, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "Invalid digest. Cannot be empty.")
+
+	testPubKey, err := k.PublicKey()
+	if err != nil {
+		t.Fatal("Failed to extract public key.")
+	}
+
+	// Test using public key for signing
+	_, err = currentBCCSP.Sign(testPubKey, digest, nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Cannot sign with a grep11.ecdsaPublicKey")
 }
 
 func TestECDSAVerify(t *testing.T) {
-	t.SkipNow()
 	k, err := currentBCCSP.KeyGen(&bccsp.ECDSAKeyGenOpts{Temporary: false})
 	if err != nil {
 		t.Fatalf("Failed generating ECDSA key [%s]", err)
@@ -578,7 +713,6 @@ func TestECDSAVerify(t *testing.T) {
 }
 
 func TestECDSAKeyImportFromExportedKey(t *testing.T) {
-	t.SkipNow()
 	// Generate an ECDSA key
 	k, err := currentBCCSP.KeyGen(&bccsp.ECDSAKeyGenOpts{Temporary: false})
 	if err != nil {
@@ -628,7 +762,6 @@ func TestECDSAKeyImportFromExportedKey(t *testing.T) {
 }
 
 func TestECDSAKeyImportFromECDSAPublicKey(t *testing.T) {
-	t.SkipNow()
 	// Generate an ECDSA key
 	k, err := currentBCCSP.KeyGen(&bccsp.ECDSAKeyGenOpts{Temporary: false})
 	if err != nil {
@@ -683,7 +816,6 @@ func TestECDSAKeyImportFromECDSAPublicKey(t *testing.T) {
 }
 
 func TestKeyImportFromX509ECDSAPublicKey(t *testing.T) {
-	t.SkipNow()
 	// Generate an ECDSA key
 	k, err := currentBCCSP.KeyGen(&bccsp.ECDSAKeyGenOpts{Temporary: false})
 	if err != nil {
