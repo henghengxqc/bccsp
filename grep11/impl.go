@@ -54,15 +54,14 @@ func New(opts GREP11Opts, fallbackKS bccsp.KeyStore) (bccsp.BCCSP, error) {
 	}
 
 	// Setup timeout context for manager connection
-	mgrCtx, cancelMgrConn := context.WithTimeout(context.Background(), time.Second*2)
+	mgrCtx, cancelMgrConn := context.WithTimeout(context.Background(), time.Second*60)
 	defer cancelMgrConn()
 
-	conn, err := grpc.DialContext(mgrCtx, opts.Address+":"+opts.Port, grpc.WithInsecure(), grpc.WithBlock())
+	mgrConn, err := grpc.DialContext(mgrCtx, opts.Address+":"+opts.Port, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
 		return nil, fmt.Errorf("Failed connecting to GREP11 manager at %s:%s [%s]", opts.Address, opts.Port, err)
 	}
-	defer conn.Close()
-	m := pb.NewGrep11ManagerClient(conn)
+	mgr := pb.NewGrep11ManagerClient(mgrConn)
 
 	if opts.FileKeystore == nil {
 		return nil, fmt.Errorf("FileKeystore is required to use GREP11 CSP")
@@ -86,7 +85,7 @@ func New(opts GREP11Opts, fallbackKS bccsp.KeyStore) (bccsp.BCCSP, error) {
 		//      when container got moved to different LPAR)
 	}
 
-	r, err := m.Load(context.Background(), &pb.LoadInfo{pin, nonce})
+	r, err := mgr.Load(context.Background(), &pb.LoadInfo{pin, nonce})
 	if err != nil {
 		return nil, fmt.Errorf("Could not remote-load EP11 library [%s]\n Remote Response: <%+v>", err, r)
 	}
@@ -115,18 +114,22 @@ func New(opts GREP11Opts, fallbackKS bccsp.KeyStore) (bccsp.BCCSP, error) {
 	}
 
 	// Setup timeout context for server connection
-	srvrCtx, cancelSrvrConn := context.WithTimeout(context.Background(), time.Second*2)
+	srvrCtx, cancelSrvrConn := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancelSrvrConn()
 
-	conn, err = grpc.DialContext(srvrCtx, r.Address, grpc.WithInsecure(), grpc.WithBlock())
+	srvrConn, err := grpc.DialContext(srvrCtx, r.Address, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
 		return nil, fmt.Errorf("Failed connecting to GREP11 dedicated connection at %s [%s]", r.Address, err)
 	}
 
-	logger.Infof("Connected to dedicated cryptoserver connection at %s", r.Address)
+	logger.Infof("Connected to a dedicated rypto Server connection at %s", r.Address)
 
-	s := pb.NewGrep11Client(conn)
-	csp := &impl{swCSP, conf, keyStore, opts.SoftVerify, s}
+	srvr := pb.NewGrep11Client(srvrConn)
+	csp := &impl{swCSP, conf, keyStore, opts.SoftVerify, &srvr, srvrConn, &mgr, mgrConn}
+
+	// Start connection state watchdog
+	go csp.monitorConnState(&opts, keyStore)
+
 	return csp, nil
 }
 
@@ -136,8 +139,11 @@ type impl struct {
 	conf *config
 	ks   bccsp.KeyStore
 
-	softVerify bool
-	grpc       pb.Grep11Client
+	softVerify     bool
+	grepClient     *pb.Grep11Client
+	srvrConnection *grpc.ClientConn
+	grepManager    *pb.Grep11ManagerClient
+	mgrConnection  *grpc.ClientConn
 }
 
 // KeyGen generates a key using opts.
@@ -321,4 +327,99 @@ func (csp *impl) Encrypt(k bccsp.Key, plaintext []byte, opts bccsp.EncrypterOpts
 // The opts argument should be appropriate for the primitive used.
 func (csp *impl) Decrypt(k bccsp.Key, ciphertext []byte, opts bccsp.DecrypterOpts) (plaintext []byte, err error) {
 	return csp.BCCSP.Decrypt(k, ciphertext, opts)
+}
+
+func (csp *impl) monitorConnState(opts *GREP11Opts, keyStore *hsmBasedKeyStore) {
+
+	logger.Debug("Started monitorConnState Go Routine")
+
+	const MAXERRORS int = 2
+	var err error
+	var numErrors int
+
+	for {
+		if numErrors > MAXERRORS {
+			logger.Fatal("Connection recovery to the GREP11 Server failed.")
+		}
+		csp.srvrConnection.WaitForStateChange(context.Background(), grpc.Ready)
+		logger.Debugf("State change has occurred for the server connection: [%s]\n", csp.srvrConnection.GetState().String())
+
+		// If there is a connection failure then attempt to recover
+		if csp.checkSrvrConn(grpc.TransientFailure) {
+			logger.Warning("A connection failure has occurred. Attempting to recover.")
+
+			// First check the status of the primary/manager server connection
+			// If the connection has failed then re-establish connectivity with the primary/manager server
+			logger.Debugf("State of Manager connection: [%s]\n", csp.mgrConnection.GetState().String())
+			if csp.mgrConnection.GetState() == grpc.TransientFailure {
+				// Close the failing primary/manager connection
+				csp.mgrConnection.Close()
+
+				// Establish a new primary/manager server connection
+				mgrCtx, _ := context.WithTimeout(context.Background(), time.Second*60)
+				csp.mgrConnection, err = grpc.DialContext(mgrCtx, opts.Address+":"+opts.Port, grpc.WithInsecure(), grpc.WithBlock())
+				if err != nil {
+					logger.Warningf("Could not connect to the primary EP11 Manager Server [%s]\n", err)
+					numErrors++
+					continue
+				}
+				*csp.grepManager = pb.NewGrep11ManagerClient(csp.mgrConnection)
+
+			}
+
+			pin, nonce, isNewPin, err := keyStore.getPinAndNonce()
+			if err != nil {
+				logger.Warningf("Failed generating PIN and Nonce for the EP11 session [%s]\n", err)
+				numErrors++
+				continue
+			}
+
+			r, err := (*csp.grepManager).Load(context.Background(), &pb.LoadInfo{pin, nonce})
+			if err != nil {
+				logger.Warningf("Could not remote-load EP11 library [%s]\n Remote Response: <%+v>", err, r)
+				numErrors++
+				continue
+			}
+			if r.Error != "" {
+				logger.Warningf("Remote Load call reports error: %s", r.Error)
+				numErrors++
+				continue
+			}
+
+			if r.Session == false {
+				// Ran out of sessions!!
+				if !isNewPin && len(pin) != 0 && len(nonce) != 0 {
+					// This is bad! Existing keys are inaccessible.
+					logger.Warningf("Failed to log in into EP11 session. Crypto material inaccessible.")
+					numErrors++
+					continue
+				}
+
+				// Carry on with reduced container isolation.
+				logger.Warningf("ep11server ran out of sessions!! Using Domain Master key to encrypt/decrypt key material.")
+				pin = nil
+				nonce = nil
+			}
+
+			// Setup timeout context for server connection
+			srvrCtx, _ := context.WithTimeout(context.Background(), time.Second*10)
+			csp.srvrConnection, err = grpc.DialContext(srvrCtx, r.Address, grpc.WithInsecure(), grpc.WithBlock())
+			if err != nil {
+				logger.Warningf("Failed connecting to GREP11 dedicated connection at %s [%s]", r.Address, err)
+				numErrors++
+				continue
+			}
+
+			logger.Infof("Connected to a dedicated Crypto Server connection at %s", r.Address)
+
+			*csp.grepClient = pb.NewGrep11Client(csp.srvrConnection)
+
+			// Recovery successful so reset error counter
+			numErrors = 0
+		}
+	}
+}
+
+func (csp *impl) checkSrvrConn(state grpc.ConnectivityState) bool {
+	return csp.srvrConnection.GetState() == state
 }

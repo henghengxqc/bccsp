@@ -40,9 +40,15 @@ import (
 	"github.com/hyperledger/fabric/bccsp/sw"
 	"github.com/hyperledger/fabric/bccsp/utils"
 	"github.com/op/go-logging"
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/vpaprots/bccsp/grep11/server"
 	"golang.org/x/crypto/sha3"
+)
+
+const (
+	ADDRESS = "localhost"
+	PORT    = "6789"
 )
 
 var (
@@ -88,8 +94,8 @@ func TestMain(m *testing.M) {
 	}
 
 	opts := GREP11Opts{
-		Address: "localhost",
-		Port:    "9876",
+		Address: ADDRESS,
+		Port:    PORT,
 	}
 
 	pinStorePath, err := ioutil.TempFile("", "hsmPinstore")
@@ -97,6 +103,9 @@ func TestMain(m *testing.M) {
 		fmt.Printf("Failed getting a temporary key store path [%s]", err)
 		os.Exit(-1)
 	}
+
+	viper.SetDefault("grep11.serverTimeoutSecs", 60)
+	viper.SetDefault("grep11.debugEnabled", true)
 
 	server.CreateTestServer(opts.Address, opts.Port, pinStorePath.Name(), 0)
 
@@ -172,8 +181,8 @@ func TestSHA2InvalidSecurityLevel(t *testing.T) {
 
 func TestNewInvalidHSMKeyStorePath(t *testing.T) {
 	testOpts := GREP11Opts{
-		Address:      "localhost",
-		Port:         "9876",
+		Address:      ADDRESS,
+		Port:         PORT,
 		HashFamily:   "SHA2",
 		SecLevel:     256,
 		SoftVerify:   true,
@@ -199,8 +208,8 @@ func TestNewNilFallbackKS(t *testing.T) {
 	defer os.RemoveAll(testStorePath)
 
 	testOpts := GREP11Opts{
-		Address:      "localhost",
-		Port:         "9876",
+		Address:      ADDRESS,
+		Port:         PORT,
 		HashFamily:   "SHA2",
 		SecLevel:     256,
 		SoftVerify:   true,
@@ -213,8 +222,8 @@ func TestNewNilFallbackKS(t *testing.T) {
 
 func TestNewNilFileKeyStore(t *testing.T) {
 	testOpts := GREP11Opts{
-		Address:      "localhost",
-		Port:         "9876",
+		Address:      ADDRESS,
+		Port:         PORT,
 		HashFamily:   "SHA2",
 		SecLevel:     256,
 		SoftVerify:   true,
@@ -235,7 +244,7 @@ func TestNewInvalidAddressPort(t *testing.T) {
 
 	testOpts := GREP11Opts{
 		Address:      "badhost",
-		Port:         "9876",
+		Port:         PORT,
 		HashFamily:   "SHA2",
 		SecLevel:     256,
 		SoftVerify:   true,

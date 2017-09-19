@@ -12,6 +12,7 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
+
 */
 package server
 
@@ -66,13 +67,36 @@ import (
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 
+	"sync"
+
 	"github.com/hyperledger/fabric/common/flogging"
+	"github.com/spf13/viper"
 	pb "github.com/vpaprots/bccsp/grep11/protos"
+	"google.golang.org/grpc/keepalive"
 )
 
 var (
-	logger = flogging.MustGetLogger("grep11server")
+	logger           = flogging.MustGetLogger("grep11server")
+	keepaliveOptions = KeepaliveOptions{
+		ServerKeepaliveTime:    30,
+		ServerKeepaliveTimeout: 5,
+	}
+	// This value is added to the current time to derive the next wakeup time for the activity watchdogs
+	// One activity watchdog per server
+	timeAdd time.Duration
 )
+
+// KeepAliveOptions is used to set the gRPC keepalive
+// settings for grep11 servers
+type KeepaliveOptions struct {
+	// ServerKeepaliveTime is the duration in seconds after which if the server
+	// does not see any activity from the client it pings the client to see
+	// if it is alive
+	ServerKeepaliveTime int
+	// ServerKeepaliveTimeout is the duration the server waits for a response
+	// from the client after sending a ping before closing the connection
+	ServerKeepaliveTimeout int
+}
 
 func init() {
 	C.m_init()
@@ -88,7 +112,11 @@ func Start(address, port, store string, sessionLimit int) error {
 		logger.Fatalf("failed to listen: %v", err)
 	}
 	logger.Infof("Manager listening on %s", lis.Addr().String())
-	grpcManager := grpc.NewServer()
+
+	// Setup Keepalive options for grep11 manager server
+	managerServerOpts := setupServerOptions()
+
+	grpcManager := grpc.NewServer(managerServerOpts...)
 	pb.RegisterGrep11ManagerServer(grpcManager, m)
 	return grpcManager.Serve(lis)
 }
@@ -104,6 +132,7 @@ func (m *grep11Manager) Load(c context.Context, loadInfo *pb.LoadInfo) (*pb.Load
 	rc := &pb.LoadStatus{}
 	srvr := &grep11Server{}
 	sessionCount := currentSessions()
+
 	logger.Debugf("We already have %d sessions and session limit is set to %d", sessionCount, m.sessionLimit)
 
 	if sessionCount < m.sessionLimit {
@@ -139,14 +168,35 @@ func (m *grep11Manager) Load(c context.Context, loadInfo *pb.LoadInfo) (*pb.Load
 		rc.Address = ""
 		return rc, fmt.Errorf(rc.Error)
 	}
-	grpcServer := grpc.NewServer()
-	pb.RegisterGrep11Server(grpcServer, srvr)
-	go grpcServer.Serve(lis)
+
+	// Setup Keepalive options for grep11 server
+	grep11ServerOptions := setupServerOptions()
+	srvr.grpcServer = grpc.NewServer(grep11ServerOptions...)
 
 	rc.Error = ""
 	rc.Address = lis.Addr().String()
+	srvr.address = rc.Address
+
+	// Setup logging, register and start new grep11 server
+	if viper.GetBool("grep11.debugEnabled") {
+		logging.SetLevel(logging.DEBUG, "grep11server_"+rc.Address)
+	}
+
 	srvr.logger = flogging.MustGetLogger("grep11server_" + rc.Address)
 
+	pb.RegisterGrep11Server(srvr.grpcServer, srvr)
+	go srvr.grpcServer.Serve(lis)
+
+	// Initialize activity watchdog wakeup time
+	timeAdd = time.Second * viper.GetDuration("grep11.serverTimeoutSecs")
+	logger.Debugf("Value of timeAdd for server: %v", timeAdd)
+	srvr.updateInactiveTimeout(newTime(timeAdd))
+
+	// Activate watchdog for client activity to the grep11 server
+	// One watchdog per grep11 server
+	go srvr.activityWatchdog()
+
+	// Inform as to whether the session or master key is being used
 	if rc.Session {
 		logger.Infof("Listening on %s for pin %s", rc.Address, loadInfo.Pin)
 	} else {
@@ -157,12 +207,20 @@ func (m *grep11Manager) Load(c context.Context, loadInfo *pb.LoadInfo) (*pb.Load
 }
 
 type grep11Server struct {
-	pinblob    [1024]byte
-	pinbloblen int
-	logger     *logging.Logger
+	pinblob           [1024]byte
+	pinbloblen        int
+	logger            *logging.Logger
+	timeOutOnInactive time.Time
+	timeMutex         sync.Mutex
+	grpcServer        *grpc.Server
+	address           string
 }
 
 func (s *grep11Server) GenerateECKey(c context.Context, generateInfo *pb.GenerateInfo) (*pb.GenerateStatus, error) {
+
+	// Update inactive timeout value
+	s.updateInactiveTimeout(newTime(timeAdd))
+
 	rc := &pb.GenerateStatus{}
 	var keyLen int = 1024
 	var pubKeyLen int = 1024
@@ -192,6 +250,7 @@ func (s *grep11Server) GenerateECKey(c context.Context, generateInfo *pb.Generat
 		return rc, fmt.Errorf(rc.Error)
 	}
 
+	// Populate returning protobuf
 	rc.PrivKey = keyBlob[:keyLen]
 	rc.PubKey = pubKeyBlob[:pubKeyLen]
 	rc.Error = ""
@@ -199,6 +258,10 @@ func (s *grep11Server) GenerateECKey(c context.Context, generateInfo *pb.Generat
 }
 
 func (s *grep11Server) SignP11ECDSA(c context.Context, signInfo *pb.SignInfo) (*pb.SignStatus, error) {
+
+	// Update inactive timeout value
+	s.updateInactiveTimeout(newTime(timeAdd))
+
 	rc := &pb.SignStatus{}
 
 	var siglen int = 1024
@@ -237,6 +300,10 @@ func (s *grep11Server) SignP11ECDSA(c context.Context, signInfo *pb.SignInfo) (*
 }
 
 func (s *grep11Server) VerifyP11ECDSA(c context.Context, verifyInfo *pb.VerifyInfo) (*pb.VerifyStatus, error) {
+
+	// Update inactive timeout value
+	s.updateInactiveTimeout(newTime(timeAdd))
+
 	rc := &pb.VerifyStatus{}
 
 	if verifyInfo.PubKey == nil {
@@ -280,6 +347,34 @@ func (s *grep11Server) VerifyP11ECDSA(c context.Context, verifyInfo *pb.VerifyIn
 	return rc, nil
 }
 
+// Activity watchdog for client activity with its associated grep11 server
+// There is one watchdog service for every grep11 server started
+func (s *grep11Server) activityWatchdog() {
+	for {
+		s.logger.Debugf("Sleeping until %v\n", s.timeOutOnInactive)
+		sleepTime := -time.Now().Sub(s.timeOutOnInactive)
+		time.Sleep(sleepTime)
+		s.logger.Debug("Awake and checking time")
+		if time.Now().After(s.timeOutOnInactive) {
+			s.logger.Debugf("No activity has occurred with the client.  Shutting down GREP11 Server listening on: %s\n", s.address)
+			s.grpcServer.Stop()
+			return
+		} else {
+			s.updateInactiveTimeout(newTime(timeAdd))
+			s.logger.Debug("Activity has occurred while sleeping. Updating new wakeup time.")
+		}
+	}
+}
+
+// Set the next time to wakeup and check for client activity for the associated grep11 server
+func (s *grep11Server) updateInactiveTimeout(time time.Time) {
+	s.timeMutex.Lock()
+	defer s.timeMutex.Unlock()
+	s.logger.Debugf("Updating next wake up time to: %v\n", time)
+	s.timeOutOnInactive = time
+}
+
+// For testing only
 func CreateTestServer(address, port, store string, sessionLimit int) {
 	go Start(address, port, store, sessionLimit)
 	time.Sleep(1000 * time.Microsecond)
@@ -287,4 +382,27 @@ func CreateTestServer(address, port, store string, sessionLimit int) {
 
 func Cleanup(store string) {
 	cleanKnownSessions(store)
+}
+
+// Setup up the GRPC server options
+// Keepalive values are set as global variables located at the top of this file
+func setupServerOptions() []grpc.ServerOption {
+	var serverOpts []grpc.ServerOption
+	kap := keepalive.ServerParameters{
+		Time:    time.Duration(keepaliveOptions.ServerKeepaliveTime) * time.Second,
+		Timeout: time.Duration(keepaliveOptions.ServerKeepaliveTimeout) * time.Second,
+	}
+	serverOpts = append(serverOpts, grpc.KeepaliveParams(kap))
+	kep := keepalive.EnforcementPolicy{
+		// needs to match clientKeepalive
+		MinTime: time.Duration(keepaliveOptions.ServerKeepaliveTime) * time.Second,
+		// allow keepalive w/o rpc
+		PermitWithoutStream: true,
+	}
+	serverOpts = append(serverOpts, grpc.KeepaliveEnforcementPolicy(kep))
+	return serverOpts
+}
+
+func newTime(timeDelta time.Duration) time.Time {
+	return time.Now().Add(timeDelta)
 }

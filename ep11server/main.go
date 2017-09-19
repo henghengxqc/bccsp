@@ -31,10 +31,15 @@ import (
 )
 
 var (
-	logger = flogging.MustGetLogger("grep11server")
+	logger       = flogging.MustGetLogger("grep11server")
+	address      string
+	port         string
+	store        string
+	sessionLimit int
 )
 
 func main() {
+
 	// For environment variables.
 	viper.SetEnvPrefix("GREP11")
 	viper.SetConfigType("yaml")
@@ -48,6 +53,8 @@ func main() {
 	viper.SetDefault("grep11.port", "9876")
 	viper.SetDefault("grep11.store", "/tmp/sessionStore.db")
 	viper.SetDefault("grep11.sessionLimit", 0)
+	viper.SetDefault("grep11.serverTimeoutSecs", 60*60*2) // 2 hour timeout
+	viper.SetDefault("grep11.debugEnabled", false)
 
 	viper.SetConfigName("grep11server")
 
@@ -56,12 +63,14 @@ func main() {
 		logger.Fatalf("Error when reading %s config file: %s", "grep11server", err)
 	}
 
-	logging.SetLevel(logging.DEBUG, "grep11server")
+	address = viper.GetString("grep11.address")
+	port = viper.GetString("grep11.port")
+	store = viper.GetString("grep11.store")
+	sessionLimit = viper.GetInt("grep11.sessionLimit")
 
-	address := viper.GetString("grep11.address")
-	port := viper.GetString("grep11.port")
-	store := viper.GetString("grep11.store")
-	sessionLimit := viper.GetInt("grep11.sessionLimit")
+	if viper.GetBool("grep11.debugEnabled") {
+		logging.SetLevel(logging.DEBUG, "grep11server")
+	}
 
 	serve := make(chan error)
 

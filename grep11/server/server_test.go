@@ -27,6 +27,7 @@ import (
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	pb "github.com/vpaprots/bccsp/grep11/protos"
 )
@@ -73,6 +74,9 @@ func TestMain(m *testing.M) {
 	}
 
 	Store = s.Name()
+
+	viper.SetDefault("grep11.serverTimeoutSecs", 60)
+	viper.SetDefault("grep11.debugEnabled", true)
 
 	CreateTestServer(Address, Port, Store, (1<<30)+5)
 
