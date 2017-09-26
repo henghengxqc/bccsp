@@ -1,6 +1,16 @@
 grep11:
+  # Address and Port of the GREP11 Manager. This is where the Manager will create the
+  # proto Grep11Manager service
   address: localhost
   port: 9876
+  
+  # Manager must keep track of sessions opened to the card. This is needed if the client
+  # dies and is removed unexpectedly and the session is left open in the card. To prevent
+  # leaking of resources in the card, session must be logged out
+  # FIXME: requested better API to the card, so that manager need not store out the pinblobs
   store: /tmp/sessionStore.db
+  
+  # How many sessions can the Manager create. (0: no sessions)
+  # FIXME: requested better API to the card, query if sessions are available.
   sessionLimit: 0
 

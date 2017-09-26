@@ -188,7 +188,7 @@ func (m *grep11Manager) Load(c context.Context, loadInfo *pb.LoadInfo) (*pb.Load
 	go srvr.grpcServer.Serve(lis)
 
 	// Initialize activity watchdog wakeup time
-	timeAdd = time.Second * viper.GetDuration("grep11.serverTimeoutSecs")
+	timeAdd = time.Second * viper.GetDuration("grep11.serverShutdownSecs")
 	logger.Debugf("Value of timeAdd for server: %v", timeAdd)
 	srvr.updateInactiveTimeout(newTime(timeAdd))
 

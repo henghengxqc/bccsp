@@ -104,7 +104,7 @@ func TestMain(m *testing.M) {
 		os.Exit(-1)
 	}
 
-	viper.SetDefault("grep11.serverTimeoutSecs", 60)
+	viper.SetDefault("grep11.serverShutdownSecs", 60)
 	viper.SetDefault("grep11.debugEnabled", true)
 
 	server.CreateTestServer(opts.Address, opts.Port, pinStorePath.Name(), 0)

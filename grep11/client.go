@@ -21,11 +21,8 @@ import (
 	"fmt"
 	"math/big"
 
-	"golang.org/x/net/context"
-
-	"time"
-
 	pb "github.com/vpaprots/bccsp/grep11/protos"
+	"golang.org/x/net/context"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -51,8 +48,6 @@ var (
 	oidNamedCurveP384 = asn1.ObjectIdentifier{1, 3, 132, 0, 34}
 	oidNamedCurveP521 = asn1.ObjectIdentifier{1, 3, 132, 0, 35}
 )
-
-const RECOVERYWAITTIME time.Duration = time.Second * 5
 
 func namedCurveFromOID(oid asn1.ObjectIdentifier) elliptic.Curve {
 	switch {
