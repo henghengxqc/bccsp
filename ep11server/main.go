@@ -49,7 +49,7 @@ func main() {
 	viper.SetDefault("grep11.port", "9876")
 	viper.SetDefault("grep11.store", "/tmp/sessionStore.db")
 	viper.SetDefault("grep11.sessionLimit", 0)
-	viper.SetDefault("grep11.serverTimeoutSecs", 60*60*2) // 2 hour timeout
+	viper.SetDefault("grep11.serverShutdownSecs", 60*60*2) // 2 hour timeout
 	viper.SetDefault("grep11.debugEnabled", false)
 
 	viper.SetConfigName("grep11server")

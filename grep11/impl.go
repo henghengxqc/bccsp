@@ -97,6 +97,11 @@ func (csp *impl) connectSession() error {
 	if err != nil {
 		return fmt.Errorf("Failed connecting to GREP11 manager at %s:%s [%s]", csp.conf.address, csp.conf.port, err)
 	}
+
+	// Close the manager TCP connection to the GREP11 Manager after
+	// connecting to its GREP11 Server service
+	defer mgrConn.Close()
+
 	csp.grepManager = pb.NewGrep11ManagerClient(mgrConn)
 
 	pin, nonce, isNewPin, err := csp.ks.(*hsmBasedKeyStore).getPinAndNonce()
@@ -107,8 +112,8 @@ func (csp *impl) connectSession() error {
 	if !isNewPin && len(pin) == 0 && len(nonce) == 0 {
 		logger.Warningf("Starting GREP11 BCCSP without a session! Using Domain Master key to encrypt/decrypt key material.")
 		//TODO: We could attempt to log in with a new session at this point
-		//      if that were to succeed, rewrap keys with new session
-		//      this might also be a place to place generic 'rewrap logic' (i.e. if Master Key changed
+		//      if that were to succeed, re-wrap keys with new session
+		//      this might also be a place to place generic 're-wrap logic' (i.e. if Master Key changed
 		//      when container got moved to different LPAR)
 	}
 
