@@ -112,7 +112,7 @@ func (csp *impl) verifyECDSA(k ecdsaPublicKey, signature, digest []byte, opts bc
 		return false, fmt.Errorf("Invalid S. Must be smaller than half the order [%s][%s].", s, halfOrder)
 	}
 
-	if csp.softVerify {
+	if csp.conf.softVerify {
 		return ecdsa.Verify(k.pub, digest, r, s), nil
 	} else {
 		return false, fmt.Errorf("HSM Verify Not yet supported")

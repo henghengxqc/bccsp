@@ -26,7 +26,8 @@ import (
 	"time"
 
 	pb "github.com/vpaprots/bccsp/grep11/protos"
-	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // RFC 5480, 2.1.1.1. Named Curve
@@ -82,21 +83,37 @@ func oidFromNamedCurve(curve elliptic.Curve) (asn1.ObjectIdentifier, bool) {
 	return nil, false
 }
 
-func (csp *impl) generateECKey(curve asn1.ObjectIdentifier, ephemeral bool) (*ecdsaPrivateKey, error) {
-
-	// Check the state of the connection to the GREP11 server.  If the connection is
-	// down then wait a few seconds before proceeding with the key generation to
-	// allow the connection watchdog to restore the connection.
-	if csp.checkSrvrConn(grpc.TransientFailure) {
-		time.Sleep(RECOVERYWAITTIME)
+func (csp *impl) reLoad(grpcCall func() error) error {
+	err := grpcCall()
+	if err != nil {
+		grpcStatus, ok := status.FromError(err)
+		if ok {
+			switch grpcStatus.Code() {
+			case codes.Unavailable, codes.FailedPrecondition:
+				logger.Debugf("GRPC Error received, reconnecting: [%s]", grpcStatus.Code().String())
+				err = csp.connectSession()
+				if err == nil {
+					err = grpcCall()
+				}
+			}
+		}
 	}
+	return err
+}
 
+func (csp *impl) generateECKey(curve asn1.ObjectIdentifier, ephemeral bool) (*ecdsaPrivateKey, error) {
 	marshaledOID, err := asn1.Marshal(curve)
 	if err != nil {
 		return nil, fmt.Errorf("Could not marshal OID [%s]", err.Error())
 	}
 
-	k, err := (*csp.grepClient).GenerateECKey(context.Background(), &pb.GenerateInfo{marshaledOID})
+	var k *pb.GenerateStatus
+	err = csp.reLoad(func() error {
+		var err error
+		k, err = csp.grepClient.GenerateECKey(context.Background(), &pb.GenerateInfo{marshaledOID})
+		return err
+	})
+
 	if err != nil {
 		return nil, fmt.Errorf("Could not remote-generate PKCS11 library [%s]\n Remote Response: <%+v>", err, k)
 	}
@@ -128,15 +145,13 @@ func (csp *impl) generateECKey(curve asn1.ObjectIdentifier, ephemeral bool) (*ec
 }
 
 func (csp *impl) signP11ECDSA(keyBlob []byte, msg []byte) (R, S *big.Int, err error) {
+	var sig *pb.SignStatus
+	err = csp.reLoad(func() error {
+		var err error
+		sig, err = csp.grepClient.SignP11ECDSA(context.Background(), &pb.SignInfo{keyBlob, msg})
+		return err
+	})
 
-	// Check the state of the connection to the GREP11 server.  If the connection is
-	// down then wait a few seconds before proceeding with the signing operation to
-	// allow the connection watchdog to restore the connection.
-	if csp.checkSrvrConn(grpc.TransientFailure) {
-		time.Sleep(RECOVERYWAITTIME)
-	}
-
-	sig, err := (*csp.grepClient).SignP11ECDSA(context.Background(), &pb.SignInfo{keyBlob, msg})
 	if err != nil {
 		return nil, nil, fmt.Errorf("Could not remote-sign PKCS11 library [%s]\n Remote Response: <%s>", err, sig)
 	}
@@ -154,13 +169,6 @@ func (csp *impl) signP11ECDSA(keyBlob []byte, msg []byte) (R, S *big.Int, err er
 
 func (csp *impl) verifyP11ECDSA(keyBlob []byte, msg []byte, R, S *big.Int, byteSize int) (valid bool, err error) {
 	// TODO: Uncomment when HSM Verify is supported
-
-	// Check the state of the connection to the GREP11 server.  If the connection is
-	// down then wait a few seconds before proceeding with the verify operation to
-	// allow the connection watchdog to restore the connection.
-	//if csp.checkSrvrConn(grpc.TransientFailure) {
-	//	time.Sleep(RECOVERYWAITTIME)
-	//}
 	//r := R.Bytes()
 	//s := S.Bytes()
 	//

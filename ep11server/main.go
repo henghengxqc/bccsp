@@ -31,11 +31,7 @@ import (
 )
 
 var (
-	logger       = flogging.MustGetLogger("grep11server")
-	address      string
-	port         string
-	store        string
-	sessionLimit int
+	logger = flogging.MustGetLogger("grep11server")
 )
 
 func main() {
@@ -63,10 +59,10 @@ func main() {
 		logger.Fatalf("Error when reading %s config file: %s", "grep11server", err)
 	}
 
-	address = viper.GetString("grep11.address")
-	port = viper.GetString("grep11.port")
-	store = viper.GetString("grep11.store")
-	sessionLimit = viper.GetInt("grep11.sessionLimit")
+	address := viper.GetString("grep11.address")
+	port := viper.GetString("grep11.port")
+	store := viper.GetString("grep11.store")
+	sessionLimit := viper.GetInt("grep11.sessionLimit")
 
 	if viper.GetBool("grep11.debugEnabled") {
 		logging.SetLevel(logging.DEBUG, "grep11server")

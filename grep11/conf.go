@@ -30,9 +30,13 @@ type config struct {
 	hashFunction  func() hash.Hash
 	aesBitLength  int
 	rsaBitLength  int
+
+	softVerify bool
+	address    string
+	port       string
 }
 
-func (conf *config) setSecurityLevel(securityLevel int, hashFamily string) (err error) {
+func (conf *config) setSecurityLevel(securityLevel int, hashFamily string, opts GREP11Opts) (err error) {
 	switch hashFamily {
 	case "SHA2":
 		err = conf.setSecurityLevelSHA2(securityLevel)
@@ -41,6 +45,10 @@ func (conf *config) setSecurityLevel(securityLevel int, hashFamily string) (err 
 	default:
 		err = fmt.Errorf("Hash Family not supported [%s]", hashFamily)
 	}
+
+	conf.softVerify = opts.SoftVerify
+	conf.address = opts.Address
+	conf.port = opts.Port
 	return
 }
 
