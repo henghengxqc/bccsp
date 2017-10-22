@@ -20,6 +20,8 @@ import (
 	"encoding/asn1"
 	"fmt"
 	"math/big"
+	"bytes"
+	"encoding/hex"
 
 	pb "github.com/vpaprots/bccsp/grep11/protos"
 	"golang.org/x/net/context"
@@ -121,21 +123,25 @@ func (csp *impl) generateECKey(curve asn1.ObjectIdentifier, ephemeral bool) (*ec
 		return nil, fmt.Errorf("Failed Unmarshaling Public Key [%s]", err)
 	}
 
-	/* VP DELETE Verifying pub key generation from soft key
-	ioutil.WriteFile("/tmp/pub.asn1", k.PubKey, 0644)
+	// VP DELETE Verifying pub key generation from soft key
+	//ioutil.WriteFile("/tmp/pub.asn1", k.PubKey, 0644)
 	checkBlob, err := pubKeyToBlob(pubGoKey)
 	if err != nil {
 		return nil, fmt.Errorf("Well this is strange! [%s]", err)
 	}
 
 	if bytes.Equal(k.PubKey, checkBlob) {
-		logger.Fatalf("VP>>>>>>>>>>>>>>>>>>>>>>>> That was too easy?")
+		//logger.Fatalf("VP>>>>>>>>>>>>>>>>>>>>>>>> That was too easy?")
+		fmt.Printf("VP>>>>>>>>>>>>>>>>>>>>>>>> That was too easy?")
 	} else {
-		logger.Fatalf("Keys mismatch\nExpected:\n%s\nGenerated:\n%s", hex.Dump(k.PubKey), hex.Dump(checkBlob))
+		//logger.Fatalf("Keys mismatch\nExpected:\n%s\nGenerated:\n%s", hex.Dump(k.PubKey), hex.Dump(checkBlob))
+		fmt.Printf("Keys mismatch\nExpected:\n%s\nGenerated:\n%s", hex.Dump(k.PubKey), hex.Dump(checkBlob))
 	}
-	//endDELETE */
+	//endDELETE
 
-	key := &ecdsaPrivateKey{ski, k.PrivKey, &ecdsaPublicKey{ski, k.PubKey, pubGoKey}}
+	//key := &ecdsaPrivateKey{ski, k.PrivKey, &ecdsaPublicKey{ski, k.PubKey, pubGoKey}}
+	// Using checkBlob. checkBlob is SPKI alone, without extra data
+	key := &ecdsaPrivateKey{ski, k.PrivKey, &ecdsaPublicKey{ski, checkBlob, pubGoKey}}
 	return key, nil
 }
 
@@ -164,22 +170,22 @@ func (csp *impl) signP11ECDSA(keyBlob []byte, msg []byte) (R, S *big.Int, err er
 
 func (csp *impl) verifyP11ECDSA(keyBlob []byte, msg []byte, R, S *big.Int, byteSize int) (valid bool, err error) {
 	// TODO: Uncomment when HSM Verify is supported
-	//r := R.Bytes()
-	//s := S.Bytes()
-	//
-	//// Pad front of R and S with Zeroes if needed
-	//sig := make([]byte, 2*byteSize)
-	//copy(sig[byteSize-len(r):byteSize], r)
-	//copy(sig[2*byteSize-len(s):], s)
-	//
-	//val, err := csp.grepClient.VerifyP11ECDSA(context.Background(), &pb.VerifyInfo{keyBlob, msg, sig})
-	//if err != nil {
-	//	return false, fmt.Errorf("Could not remote-verify PKCS11 library [%s]\n Remote Response: <%+v>", err, val)
-	//}
-	//if val.Error != "" {
-	//	return false, fmt.Errorf("Remote Verify call reports error: %s", val.Error)
-	//}
-	//
-	//return val.Valid, nil
-	return false, fmt.Errorf("Remote Verify is currently not supported.")
+	r := R.Bytes()
+	s := S.Bytes()
+	
+	// Pad front of R and S with Zeroes if needed
+	sig := make([]byte, 2*byteSize)
+	copy(sig[byteSize-len(r):byteSize], r)
+	copy(sig[2*byteSize-len(s):], s)
+	
+	val, err := csp.grepClient.VerifyP11ECDSA(context.Background(), &pb.VerifyInfo{keyBlob, msg, sig})
+	if err != nil {
+		return false, fmt.Errorf("Could not remote-verify PKCS11 library [%s]\n Remote Response: <%+v>", err, val)
+	}
+	if val.Error != "" {
+		return false, fmt.Errorf("Remote Verify call reports error: %s", val.Error)
+	}
+	
+	return val.Valid, nil
+	//return false, fmt.Errorf("Remote Verify is currently not supported.")
 }

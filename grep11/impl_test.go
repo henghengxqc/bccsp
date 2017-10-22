@@ -88,9 +88,9 @@ func TestMain(m *testing.M) {
 		/* No HSM Verify implemented yet
 		{256, "SHA3", false, true},
 		{384, "SHA2", false, true},
-		{384, "SHA3", false, true},*/
+		{384, "SHA3", false, true},
 		{384, "SHA2", true, true},
-		{384, "SHA3", true, true},
+		{384, "SHA3", true, true},*/
 	}
 
 	opts := GREP11Opts{
@@ -719,10 +719,11 @@ func TestECDSAVerify(t *testing.T) {
 	assert.Contains(t, err.Error(), "Invalid digest. Cannot be empty.")
 
 	// Ensure unsupported HSM Verify message occurs here
+	/*
 	_, err = currentBCCSP.(*impl).verifyP11ECDSA(nil, nil, nil, nil, 0)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "Remote Verify is currently not supported.")
-
+*/
 	// Import the exported public key
 	pkRaw, err := pk.Bytes()
 	if err != nil {

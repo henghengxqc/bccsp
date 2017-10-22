@@ -16,7 +16,7 @@ limitations under the License.
 package server
 
 /*
-#cgo LDFLAGS: -l:libep11.so
+#cgo LDFLAGS: -l:libgrep11.so
 #cgo CFLAGS: -std=c99 -I.
 
 #define CK_PTR *

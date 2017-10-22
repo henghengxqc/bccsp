@@ -115,7 +115,7 @@ func (csp *impl) verifyECDSA(k ecdsaPublicKey, signature, digest []byte, opts bc
 	if csp.conf.softVerify {
 		return ecdsa.Verify(k.pub, digest, r, s), nil
 	} else {
-		return false, fmt.Errorf("HSM Verify Not yet supported")
-		//return csp.verifyP11ECDSA(k.keyBlob, digest, r, s, k.pub.Curve.Params().BitSize/8)
+		//return false, fmt.Errorf("HSM Verify Not yet supported")
+		return csp.verifyP11ECDSA(k.keyBlob, digest, r, s, k.pub.Curve.Params().BitSize/8)
 	}
 }
