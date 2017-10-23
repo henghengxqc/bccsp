@@ -85,9 +85,9 @@ func TestMain(m *testing.M) {
 	tests := []testConfig{
 		{256, "SHA2", true, true},
 		{256, "SHA3", true, true},
-		/* No HSM Verify implemented yet
+		// No HSM Verify implemented yet
 		{256, "SHA3", false, true},
-		{384, "SHA2", false, true},
+		/*{384, "SHA2", false, true},
 		{384, "SHA3", false, true},
 		{384, "SHA2", true, true},
 		{384, "SHA3", true, true},*/
